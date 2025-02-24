@@ -276,10 +276,10 @@ export default class MentionsPlugin extends Plugin {
         const files = this.app.vault.getMarkdownFiles();
         for (const file of files) {
             const content = await this.app.vault.read(file);
-            const matches = content.match(/(?:^|\s)@[a-zA-Zа-яА-Я.-]+/g);
+            const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
             if (matches) {
                 matches.forEach(match => {
-                    const cleanMatch = match.trim();
+                    const cleanMatch = match.replace(/^\s*/, '');
                     const position = content.indexOf(match);
                     // Only add if not already exists
                     const exists = this.mentions.some(m => 
@@ -382,10 +382,13 @@ export default class MentionsPlugin extends Plugin {
             .mention-tag {
                 color: var(--text-accent);
                 background-color: var(--background-modifier-border);
-                padding: 2px 4px;
+                padding: 0 4px;
                 border-radius: 4px;
                 cursor: pointer;
+                display: inline-block;
                 transition: background-color 0.2s ease;
+                white-space: nowrap;
+                line-height: normal;
             }
             .mention-tag:hover {
                 background-color: var(--background-modifier-border-hover);
@@ -454,11 +457,11 @@ export default class MentionsPlugin extends Plugin {
             const files = this.app.vault.getMarkdownFiles();
             for (const file of files) {
                 const content = await this.app.vault.read(file);
-                const matches = content.match(/(?:^|\s)@[a-zA-Zа-яА-Я.-]+/g);
+                const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
                 if (matches) {
                     console.log(`Found mentions in ${file.path}:`, matches);
                     matches.forEach(match => {
-                        const cleanMatch = match.trim();
+                        const cleanMatch = match.replace(/^\s*/, '');
                         const position = content.indexOf(match);
                         // Only add if not already exists
                         const exists = this.mentions.some(m => 
@@ -532,7 +535,7 @@ export default class MentionsPlugin extends Plugin {
                 
                 while (node = walker.nextNode() as Text) {
                     nodeCount++;
-                    const matchResult = node.textContent?.match(/(?:^|\s)@[a-zA-Zа-яА-Я.-]+/g);
+                    const matchResult = node.textContent?.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
                     console.log(`Processing node ${nodeCount}:`, {
                         text: node.textContent,
                         matchResult
@@ -549,8 +552,9 @@ export default class MentionsPlugin extends Plugin {
                     let text = node.textContent || '';
                     const fragment = document.createDocumentFragment();
 
-                    matches.forEach(match => {
+                    matches.forEach((match: string) => {
                         // Add text before the mention
+                        const cleanMatch = match.replace(/^\s*/, '');
                         const beforeText = text.slice(pos, text.indexOf(match, pos));
                         if (beforeText) {
                             fragment.append(beforeText);
@@ -560,21 +564,21 @@ export default class MentionsPlugin extends Plugin {
                         const mentionEl = document.createElement('span');
                         mentionEl.addClass('mention');
                         mentionEl.addClass('mention-tag');
-                        mentionEl.textContent = match;
+                        mentionEl.textContent = cleanMatch;
                         mentionEl.style.cursor = 'pointer';
-                        mentionEl.setAttribute('data-mention', match);
+                        mentionEl.setAttribute('data-mention', cleanMatch);
                         
                         // Store the mention before adding the click handler
                         const position = text.indexOf(match, pos);
                         const mention = {
-                            text: match,
+                            text: cleanMatch,
                             file: ctx.sourcePath,
                             position: position
                         };
                         
                         // Only add if not already exists
                         const exists = this.mentions.some(m => 
-                            m.text === match && 
+                            m.text === cleanMatch && 
                             m.file === ctx.sourcePath && 
                             m.position === position
                         );
@@ -590,11 +594,11 @@ export default class MentionsPlugin extends Plugin {
                             e.preventDefault();
                             e.stopPropagation();
                             console.log('Mention clicked:', {
-                                match,
-                                fullText: match,
-                                searchText: match.slice(1)
+                                match: cleanMatch,
+                                fullText: cleanMatch,
+                                searchText: cleanMatch.slice(1)
                             });
-                            await this.showMentionResults(match.slice(1)); // Remove @ symbol
+                            await this.showMentionResults(cleanMatch.slice(1)); // Remove @ symbol
                         };
 
                         mentionEl.removeEventListener('click', clickHandler);
@@ -647,15 +651,16 @@ export default class MentionsPlugin extends Plugin {
                         this.mentions = this.mentions.filter(m => m.file !== file.path);
                         
                         // Find all mentions in the file
-                        const matches = content.match(/(?:^|\s)@[a-zA-Zа-яА-Я.-]+/g);
+                        const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
                         if (matches) {
                             console.log('Found mentions in file:', matches);
                             
                             // Add new mentions
                             matches.forEach(match => {
+                                const cleanMatch = match.replace(/^\s*/, '');
                                 const position = content.indexOf(match);
                                 this.mentions.push({
-                                    text: match,
+                                    text: cleanMatch,
                                     file: file.path,
                                     position
                                 });
@@ -703,12 +708,13 @@ export default class MentionsPlugin extends Plugin {
                     if (file instanceof TFile && file.extension === 'md') {
                         console.log('New file created:', file.path);
                         const content = await this.app.vault.read(file);
-                        const matches = content.match(/(?:^|\s)@[a-zA-Zа-яА-Я.-]+/g);
+                        const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
                         if (matches) {
                             matches.forEach(match => {
+                                const cleanMatch = match.replace(/^\s*/, '');
                                 const position = content.indexOf(match);
                                 this.mentions.push({
-                                    text: match,
+                                    text: cleanMatch,
                                     file: file.path,
                                     position
                                 });
@@ -785,16 +791,17 @@ export default class MentionsPlugin extends Plugin {
             create: () => Decoration.none,
             update: (decorations, tr) => {
                 const text = tr.state.doc.toString();
-                const matches = text.match(/(?:^|\s)@[a-zA-Zа-яА-Я.-]+/g);
+                const matches = text.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
                 const decorationArray: any[] = [];
 
                 if (matches) {
                     let pos = 0;
                     matches.forEach((match: string) => {
-                        const cleanMatch = match.trim();
-                        const start = text.indexOf(match, pos);
+                        const fullMatch = match;
+                        const cleanMatch = match.replace(/^\s*/, '');
+                        const start = text.indexOf(fullMatch, pos) + (fullMatch.length - cleanMatch.length);
                         if (start >= 0) {
-                            const end = start + match.length;
+                            const end = start + cleanMatch.length;
                             const mentionMark = Decoration.mark({
                                 class: "mention mention-tag",
                                 attributes: { "data-mention": cleanMatch }
