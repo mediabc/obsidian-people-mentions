@@ -344,7 +344,6 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
       if (savedMentions) {
         this.mentions = savedMentions;
         console.log("Mentions loaded into memory:", this.mentions);
-        new import_obsidian.Notice(`Loaded ${savedMentions.length} mentions`);
       }
       console.log("Processing existing files for mentions...");
       const files = this.app.vault.getMarkdownFiles();

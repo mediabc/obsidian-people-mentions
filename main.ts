@@ -449,7 +449,6 @@ export default class MentionsPlugin extends Plugin {
             if (savedMentions) {
                 this.mentions = savedMentions;
                 console.log('Mentions loaded into memory:', this.mentions);
-                new Notice(`Loaded ${savedMentions.length} mentions`);
             }
 
             // Process all existing markdown files
