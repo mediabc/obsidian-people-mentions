@@ -70,7 +70,7 @@ var MentionSuggest = class extends import_obsidian.EditorSuggest {
   onTrigger(cursor, editor, file) {
     const line = editor.getLine(cursor.line);
     const subString = line.substring(0, cursor.ch);
-    const match = subString.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]*)$/);
+    const match = subString.match(/(?:^|\s)(@[a-zа-я.-]*)$/);
     this.plugin.debugLogger.log("MentionSuggest.onTrigger:", { line, subString, match });
     if (!match)
       return null;
@@ -204,7 +204,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
     const files = this.app.vault.getMarkdownFiles();
     for (const file of files) {
       const content = await this.app.vault.read(file);
-      const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+      const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
       if (matches) {
         matches.forEach((match) => {
           const cleanMatch = match.replace(/^\s*/, "");
@@ -349,7 +349,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
       const files = this.app.vault.getMarkdownFiles();
       for (const file of files) {
         const content = await this.app.vault.read(file);
-        const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+        const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
         if (matches) {
           console.log(`Found mentions in ${file.path}:`, matches);
           matches.forEach((match) => {
@@ -413,7 +413,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
         let nodeCount = 0;
         while (node = walker.nextNode()) {
           nodeCount++;
-          const matchResult = (_a = node.textContent) == null ? void 0 : _a.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+          const matchResult = (_a = node.textContent) == null ? void 0 : _a.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
           console.log(`Processing node ${nodeCount}:`, {
             text: node.textContent,
             matchResult
@@ -496,7 +496,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
             const content = await this.app.vault.read(file);
             console.log("Processing file content for mentions");
             this.mentions = this.mentions.filter((m) => m.file !== file.path);
-            const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+            const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
             if (matches) {
               console.log("Found mentions in file:", matches);
               matches.forEach((match) => {
@@ -539,7 +539,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
           if (file instanceof import_obsidian.TFile && file.extension === "md") {
             console.log("New file created:", file.path);
             const content = await this.app.vault.read(file);
-            const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+            const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
             if (matches) {
               matches.forEach((match) => {
                 const cleanMatch = match.replace(/^\s*/, "");
@@ -602,7 +602,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
       create: () => import_view.Decoration.none,
       update: (decorations, tr) => {
         const text = tr.state.doc.toString();
-        const matches = text.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+        const matches = text.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
         const decorationArray = [];
         if (matches) {
           let pos = 0;

@@ -94,7 +94,7 @@ class MentionSuggest extends EditorSuggest<string> {
     onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
         const line = editor.getLine(cursor.line);
         const subString = line.substring(0, cursor.ch);
-        const match = subString.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]*)$/);
+        const match = subString.match(/(?:^|\s)(@[a-zа-я.-]*)$/);
 
         this.plugin.debugLogger.log('MentionSuggest.onTrigger:', { line, subString, match });
 
@@ -276,7 +276,7 @@ export default class MentionsPlugin extends Plugin {
         const files = this.app.vault.getMarkdownFiles();
         for (const file of files) {
             const content = await this.app.vault.read(file);
-            const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+            const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
             if (matches) {
                 matches.forEach(match => {
                     const cleanMatch = match.replace(/^\s*/, '');
@@ -456,7 +456,7 @@ export default class MentionsPlugin extends Plugin {
             const files = this.app.vault.getMarkdownFiles();
             for (const file of files) {
                 const content = await this.app.vault.read(file);
-                const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+                const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
                 if (matches) {
                     console.log(`Found mentions in ${file.path}:`, matches);
                     matches.forEach(match => {
@@ -534,7 +534,7 @@ export default class MentionsPlugin extends Plugin {
                 
                 while (node = walker.nextNode() as Text) {
                     nodeCount++;
-                    const matchResult = node.textContent?.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+                    const matchResult = node.textContent?.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
                     console.log(`Processing node ${nodeCount}:`, {
                         text: node.textContent,
                         matchResult
@@ -650,7 +650,7 @@ export default class MentionsPlugin extends Plugin {
                         this.mentions = this.mentions.filter(m => m.file !== file.path);
                         
                         // Find all mentions in the file
-                        const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+                        const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
                         if (matches) {
                             console.log('Found mentions in file:', matches);
                             
@@ -707,7 +707,7 @@ export default class MentionsPlugin extends Plugin {
                     if (file instanceof TFile && file.extension === 'md') {
                         console.log('New file created:', file.path);
                         const content = await this.app.vault.read(file);
-                        const matches = content.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+                        const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
                         if (matches) {
                             matches.forEach(match => {
                                 const cleanMatch = match.replace(/^\s*/, '');
@@ -790,7 +790,7 @@ export default class MentionsPlugin extends Plugin {
             create: () => Decoration.none,
             update: (decorations, tr) => {
                 const text = tr.state.doc.toString();
-                const matches = text.match(/(?:^|\s)(@[a-zA-Zа-яА-Я.-]+)/g);
+                const matches = text.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
                 const decorationArray: any[] = [];
 
                 if (matches) {
