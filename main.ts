@@ -26,10 +26,14 @@ import { StateField, StateEffect } from '@codemirror/state';
 
 interface MentionsPluginSettings {
     debugMode: boolean;
+    autoUpdateProperties: boolean;
+    propertiesFieldName: string;
 }
 
 const DEFAULT_SETTINGS: MentionsPluginSettings = {
-    debugMode: false
+    debugMode: false,
+    autoUpdateProperties: true,
+    propertiesFieldName: 'mentions'
 };
 
 class DebugLogger {
@@ -70,6 +74,27 @@ class MentionsSettingTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.debugMode = value;
                     this.plugin.debugLogger.setEnabled(value);
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
+            .setName('Auto-update properties')
+            .setDesc('Automatically update mentions in file properties when document changes')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.autoUpdateProperties)
+                .onChange(async (value) => {
+                    this.plugin.settings.autoUpdateProperties = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
+            .setName('Properties field name')
+            .setDesc('Name of the property field to store mentions (default: mentions)')
+            .addText(text => text
+                .setPlaceholder('mentions')
+                .setValue(this.plugin.settings.propertiesFieldName)
+                .onChange(async (value) => {
+                    this.plugin.settings.propertiesFieldName = value || 'mentions';
                     await this.plugin.saveSettings();
                 }));
     }
@@ -204,6 +229,19 @@ class MentionsView extends ItemView {
             refreshButton.removeClass("refreshing");
         });
 
+        // Add button to update properties for all files
+        const updatePropertiesButton = headerContainer.createEl("button", { 
+            cls: "mentions-update-properties-button",
+            text: "Обновить Properties",
+            attr: { 'aria-label': 'Update mentions in all file properties' }
+        });
+        
+        updatePropertiesButton.addEventListener("click", async () => {
+            updatePropertiesButton.addClass("refreshing");
+            await this.plugin.updateMentionsForAllFiles();
+            updatePropertiesButton.removeClass("refreshing");
+        });
+
         // Group mentions by text
         const mentionGroups = new Map<string, Mention[]>();
         this.mentions.forEach(mention => {
@@ -264,6 +302,141 @@ export default class MentionsPlugin extends Plugin {
     getMentions(): Mention[] {
         this.debugLogger.log('Getting mentions:', this.mentions);
         return this.mentions;
+    }
+
+    /**
+     * Extract mentions from file content
+     */
+    extractMentionsFromContent(content: string): string[] {
+        const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)(?=\s|$|[^\w.-])/g);
+        if (!matches) return [];
+        
+        const mentions = matches.map(match => {
+            const cleanMatch = match.replace(/^\s*/, ''); // Remove leading whitespace
+            const mention = cleanMatch.substring(1); // Remove @ symbol
+            // Remove trailing punctuation
+            return mention.replace(/[.,!?;:]+$/, '');
+        });
+        return [...new Set(mentions)]; // Remove duplicates
+    }
+
+    /**
+     * Update file properties with mentions
+     */
+    async updateFileProperties(file: TFile, mentions: string[]): Promise<void> {
+        try {
+            this.debugLogger.log('Updating file properties for:', file.path, 'with mentions:', mentions);
+            
+            // Read current file content
+            const content = await this.app.vault.read(file);
+            
+            // Parse frontmatter
+            const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
+            const frontmatterMatch = content.match(frontmatterRegex);
+            
+            let frontmatter: any = {};
+            let bodyContent = content;
+            let frontmatterString = '';
+            
+            if (frontmatterMatch) {
+                frontmatterString = frontmatterMatch[1];
+                bodyContent = content.replace(frontmatterRegex, '');
+                
+                // Parse YAML frontmatter
+                try {
+                    // Simple YAML parser for basic properties
+                    frontmatterString.split('\n').forEach(line => {
+                        const match = line.match(/^(\w+):\s*(.*)$/);
+                        if (match) {
+                            const [, key, value] = match;
+                            if (value.startsWith('[') && value.endsWith(']')) {
+                                // Parse array
+                                const arrayContent = value.slice(1, -1);
+                                if (arrayContent.trim()) {
+                                    frontmatter[key] = arrayContent.split(',').map(item => item.trim().replace(/['"]/g, ''));
+                                } else {
+                                    frontmatter[key] = [];
+                                }
+                            } else {
+                                frontmatter[key] = value.replace(/['"]/g, '');
+                            }
+                        }
+                    });
+                } catch (error) {
+                    this.debugLogger.log('Error parsing frontmatter:', error);
+                }
+            }
+            
+            // Update mentions in frontmatter
+            frontmatter[this.settings.propertiesFieldName] = mentions;
+            
+            // Build new frontmatter
+            const newFrontmatterLines = Object.entries(frontmatter).map(([key, value]) => {
+                if (Array.isArray(value)) {
+                    if (value.length === 0) {
+                        return `${key}: []`;
+                    }
+                    return `${key}: [${value.map(v => `"${v}"`).join(', ')}]`;
+                } else {
+                    return `${key}: "${value}"`;
+                }
+            });
+            
+            const newFrontmatter = newFrontmatterLines.length > 0 
+                ? `---\n${newFrontmatterLines.join('\n')}\n---\n` 
+                : '';
+            
+            const newContent = newFrontmatter + bodyContent;
+            
+            // Write updated content
+            await this.app.vault.modify(file, newContent);
+            
+            this.debugLogger.log('File properties updated successfully for:', file.path);
+        } catch (error) {
+            console.error('Error updating file properties:', error);
+            new Notice(`Error updating properties for ${file.name}: ${error.message}`);
+        }
+    }
+
+    /**
+     * Update properties for a specific file
+     */
+    async updateMentionsForFile(file: TFile): Promise<void> {
+        try {
+            const content = await this.app.vault.read(file);
+            const mentions = this.extractMentionsFromContent(content);
+            await this.updateFileProperties(file, mentions);
+            
+            new Notice(`Updated mentions for ${file.name}`);
+        } catch (error) {
+            console.error('Error updating mentions for file:', error);
+            new Notice(`Error updating mentions for ${file.name}`);
+        }
+    }
+
+    /**
+     * Update properties for all markdown files
+     */
+    async updateMentionsForAllFiles(): Promise<void> {
+        try {
+            const files = this.app.vault.getMarkdownFiles();
+            let updatedCount = 0;
+            
+            for (const file of files) {
+                const content = await this.app.vault.read(file);
+                const mentions = this.extractMentionsFromContent(content);
+                
+                if (mentions.length > 0) {
+                    await this.updateFileProperties(file, mentions);
+                    updatedCount++;
+                }
+            }
+            
+            new Notice(`Updated mentions for ${updatedCount} files`);
+        } catch (error) {
+            console.error('Error updating mentions for all files:', error);
+            new Notice('Error updating mentions for all files');
+        }
     }
 
     async refreshAllMentions(): Promise<void> {
@@ -407,6 +580,38 @@ export default class MentionsPlugin extends Plugin {
                 color: var(--text-muted);
                 font-size: 0.9em;
             }
+            .mentions-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 16px;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .mentions-title {
+                margin: 0;
+                flex: 1;
+            }
+            .mentions-refresh-button,
+            .mentions-update-properties-button {
+                padding: 4px 8px;
+                font-size: 0.8em;
+                border: 1px solid var(--background-modifier-border);
+                border-radius: 4px;
+                background: var(--background-primary);
+                color: var(--text-normal);
+                cursor: pointer;
+                transition: all 0.2s ease;
+            }
+            .mentions-refresh-button:hover,
+            .mentions-update-properties-button:hover {
+                background: var(--background-modifier-border);
+            }
+            .mentions-refresh-button.refreshing,
+            .mentions-update-properties-button.refreshing {
+                opacity: 0.6;
+                cursor: not-allowed;
+            }
         `;
         document.head.appendChild(mentionStyles);
 
@@ -433,6 +638,24 @@ export default class MentionsPlugin extends Plugin {
             name: "Show People mentions View",
             callback: () => {
                 this.activateMentionsView();
+            }
+        });
+
+        this.addCommand({
+            id: "update-current-file-mentions",
+            name: "Update mentions in current file properties",
+            editorCallback: (editor: Editor, view: MarkdownView) => {
+                if (view.file) {
+                    this.updateMentionsForFile(view.file);
+                }
+            }
+        });
+
+        this.addCommand({
+            id: "update-all-files-mentions",
+            name: "Update mentions in all files properties",
+            callback: () => {
+                this.updateMentionsForAllFiles();
             }
         });
 
@@ -673,6 +896,14 @@ export default class MentionsPlugin extends Plugin {
                             await this.mentionsView.setMentions(this.mentions);
                         }
                         await this.saveData(this.mentions);
+
+                        // Auto-update properties if enabled
+                        if (this.settings.autoUpdateProperties) {
+                            const fileMentions = this.extractMentionsFromContent(content);
+                            if (fileMentions.length > 0) {
+                                await this.updateFileProperties(file, fileMentions);
+                            }
+                        }
                     }
                 })
             );
@@ -724,6 +955,14 @@ export default class MentionsPlugin extends Plugin {
                                 await this.mentionsView.setMentions(this.mentions);
                             }
                             await this.saveData(this.mentions);
+
+                            // Auto-update properties if enabled
+                            if (this.settings.autoUpdateProperties) {
+                                const fileMentions = this.extractMentionsFromContent(content);
+                                if (fileMentions.length > 0) {
+                                    await this.updateFileProperties(file, fileMentions);
+                                }
+                            }
                         }
                     }
                 })

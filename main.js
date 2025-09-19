@@ -31,7 +31,9 @@ var import_obsidian = require("obsidian");
 var import_view = require("@codemirror/view");
 var import_state = require("@codemirror/state");
 var DEFAULT_SETTINGS = {
-  debugMode: false
+  debugMode: false,
+  autoUpdateProperties: true,
+  propertiesFieldName: "mentions"
 };
 var DebugLogger = class {
   constructor(enabled = false) {
@@ -57,6 +59,14 @@ var MentionsSettingTab = class extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(containerEl).setName("Debug Mode").setDesc("Enable debug logging in the console").addToggle((toggle) => toggle.setValue(this.plugin.settings.debugMode).onChange(async (value) => {
       this.plugin.settings.debugMode = value;
       this.plugin.debugLogger.setEnabled(value);
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Auto-update properties").setDesc("Automatically update mentions in file properties when document changes").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoUpdateProperties).onChange(async (value) => {
+      this.plugin.settings.autoUpdateProperties = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Properties field name").setDesc("Name of the property field to store mentions (default: mentions)").addText((text) => text.setPlaceholder("mentions").setValue(this.plugin.settings.propertiesFieldName).onChange(async (value) => {
+      this.plugin.settings.propertiesFieldName = value || "mentions";
       await this.plugin.saveSettings();
     }));
   }
@@ -153,6 +163,16 @@ var MentionsView = class extends import_obsidian.ItemView {
       await this.plugin.refreshAllMentions();
       refreshButton.removeClass("refreshing");
     });
+    const updatePropertiesButton = headerContainer.createEl("button", {
+      cls: "mentions-update-properties-button",
+      text: "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C Properties",
+      attr: { "aria-label": "Update mentions in all file properties" }
+    });
+    updatePropertiesButton.addEventListener("click", async () => {
+      updatePropertiesButton.addClass("refreshing");
+      await this.plugin.updateMentionsForAllFiles();
+      updatePropertiesButton.removeClass("refreshing");
+    });
     const mentionGroups = /* @__PURE__ */ new Map();
     this.mentions.forEach((mention) => {
       const existingGroup = mentionGroups.get(mention.text) || [];
@@ -197,6 +217,114 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
   getMentions() {
     this.debugLogger.log("Getting mentions:", this.mentions);
     return this.mentions;
+  }
+  /**
+   * Extract mentions from file content
+   */
+  extractMentionsFromContent(content) {
+    const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)(?=\s|$|[^\w.-])/g);
+    if (!matches)
+      return [];
+    const mentions = matches.map((match) => {
+      const cleanMatch = match.replace(/^\s*/, "");
+      const mention = cleanMatch.substring(1);
+      return mention.replace(/[.,!?;:]+$/, "");
+    });
+    return [...new Set(mentions)];
+  }
+  /**
+   * Update file properties with mentions
+   */
+  async updateFileProperties(file, mentions) {
+    try {
+      this.debugLogger.log("Updating file properties for:", file.path, "with mentions:", mentions);
+      const content = await this.app.vault.read(file);
+      const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
+      const frontmatterMatch = content.match(frontmatterRegex);
+      let frontmatter = {};
+      let bodyContent = content;
+      let frontmatterString = "";
+      if (frontmatterMatch) {
+        frontmatterString = frontmatterMatch[1];
+        bodyContent = content.replace(frontmatterRegex, "");
+        try {
+          frontmatterString.split("\n").forEach((line) => {
+            const match = line.match(/^(\w+):\s*(.*)$/);
+            if (match) {
+              const [, key, value] = match;
+              if (value.startsWith("[") && value.endsWith("]")) {
+                const arrayContent = value.slice(1, -1);
+                if (arrayContent.trim()) {
+                  frontmatter[key] = arrayContent.split(",").map((item) => item.trim().replace(/['"]/g, ""));
+                } else {
+                  frontmatter[key] = [];
+                }
+              } else {
+                frontmatter[key] = value.replace(/['"]/g, "");
+              }
+            }
+          });
+        } catch (error) {
+          this.debugLogger.log("Error parsing frontmatter:", error);
+        }
+      }
+      frontmatter[this.settings.propertiesFieldName] = mentions;
+      const newFrontmatterLines = Object.entries(frontmatter).map(([key, value]) => {
+        if (Array.isArray(value)) {
+          if (value.length === 0) {
+            return `${key}: []`;
+          }
+          return `${key}: [${value.map((v) => `"${v}"`).join(", ")}]`;
+        } else {
+          return `${key}: "${value}"`;
+        }
+      });
+      const newFrontmatter = newFrontmatterLines.length > 0 ? `---
+${newFrontmatterLines.join("\n")}
+---
+` : "";
+      const newContent = newFrontmatter + bodyContent;
+      await this.app.vault.modify(file, newContent);
+      this.debugLogger.log("File properties updated successfully for:", file.path);
+    } catch (error) {
+      console.error("Error updating file properties:", error);
+      new import_obsidian.Notice(`Error updating properties for ${file.name}: ${error.message}`);
+    }
+  }
+  /**
+   * Update properties for a specific file
+   */
+  async updateMentionsForFile(file) {
+    try {
+      const content = await this.app.vault.read(file);
+      const mentions = this.extractMentionsFromContent(content);
+      await this.updateFileProperties(file, mentions);
+      new import_obsidian.Notice(`Updated mentions for ${file.name}`);
+    } catch (error) {
+      console.error("Error updating mentions for file:", error);
+      new import_obsidian.Notice(`Error updating mentions for ${file.name}`);
+    }
+  }
+  /**
+   * Update properties for all markdown files
+   */
+  async updateMentionsForAllFiles() {
+    try {
+      const files = this.app.vault.getMarkdownFiles();
+      let updatedCount = 0;
+      for (const file of files) {
+        const content = await this.app.vault.read(file);
+        const mentions = this.extractMentionsFromContent(content);
+        if (mentions.length > 0) {
+          await this.updateFileProperties(file, mentions);
+          updatedCount++;
+        }
+      }
+      new import_obsidian.Notice(`Updated mentions for ${updatedCount} files`);
+    } catch (error) {
+      console.error("Error updating mentions for all files:", error);
+      new import_obsidian.Notice("Error updating mentions for all files");
+    }
   }
   async refreshAllMentions() {
     this.debugLogger.log("Starting full mentions refresh...");
@@ -313,6 +441,38 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
                 color: var(--text-muted);
                 font-size: 0.9em;
             }
+            .mentions-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 16px;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .mentions-title {
+                margin: 0;
+                flex: 1;
+            }
+            .mentions-refresh-button,
+            .mentions-update-properties-button {
+                padding: 4px 8px;
+                font-size: 0.8em;
+                border: 1px solid var(--background-modifier-border);
+                border-radius: 4px;
+                background: var(--background-primary);
+                color: var(--text-normal);
+                cursor: pointer;
+                transition: all 0.2s ease;
+            }
+            .mentions-refresh-button:hover,
+            .mentions-update-properties-button:hover {
+                background: var(--background-modifier-border);
+            }
+            .mentions-refresh-button.refreshing,
+            .mentions-update-properties-button.refreshing {
+                opacity: 0.6;
+                cursor: not-allowed;
+            }
         `;
     document.head.appendChild(mentionStyles);
     this.registerView(
@@ -332,6 +492,22 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
       name: "Show People mentions View",
       callback: () => {
         this.activateMentionsView();
+      }
+    });
+    this.addCommand({
+      id: "update-current-file-mentions",
+      name: "Update mentions in current file properties",
+      editorCallback: (editor, view) => {
+        if (view.file) {
+          this.updateMentionsForFile(view.file);
+        }
+      }
+    });
+    this.addCommand({
+      id: "update-all-files-mentions",
+      name: "Update mentions in all files properties",
+      callback: () => {
+        this.updateMentionsForAllFiles();
       }
     });
     try {
@@ -514,6 +690,12 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
               await this.mentionsView.setMentions(this.mentions);
             }
             await this.saveData(this.mentions);
+            if (this.settings.autoUpdateProperties) {
+              const fileMentions = this.extractMentionsFromContent(content);
+              if (fileMentions.length > 0) {
+                await this.updateFileProperties(file, fileMentions);
+              }
+            }
           }
         })
       );
@@ -554,6 +736,12 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
                 await this.mentionsView.setMentions(this.mentions);
               }
               await this.saveData(this.mentions);
+              if (this.settings.autoUpdateProperties) {
+                const fileMentions = this.extractMentionsFromContent(content);
+                if (fileMentions.length > 0) {
+                  await this.updateFileProperties(file, fileMentions);
+                }
+              }
             }
           }
         })

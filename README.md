@@ -9,6 +9,9 @@ A plugin for Obsidian that adds support for @mentions of people in your notes. M
 - 📋 Directory of all people mentions with navigation
 - 🎨 Stylish formatting of mentions in text
 - ⌨️ Keyboard shortcuts support
+- 📝 **NEW**: Bases support: automatic properties column creation with all file mentions
+   - 🔄 Auto-update properties when document changes
+   - ⚙️ Configurable properties field name and auto-update settings
 
 ## Installation
 
@@ -43,6 +46,29 @@ Need to discuss this with @anna and @boris
 - Click any mention to search for all its occurrences
 - Use the side panel (@ icon in left panel) to view all people mentions
 - Open mentions list via "Show People mentions View" command (Ctrl/Cmd + P)
+
+### Properties Integration
+
+The plugin can automatically add a `mentions` property to your file's frontmatter containing all people mentioned in that document:
+
+```yaml
+---
+title: "My Note"
+mentions: ["anna", "boris", "victor"]
+---
+
+Content with @anna, @boris, and @victor mentions...
+```
+
+#### Commands
+
+- **Update mentions in current file properties**: Updates properties for the currently active file
+- **Update mentions in all files properties**: Batch update properties for all markdown files in vault
+
+#### Settings
+
+- **Auto-update properties**: Automatically update mention properties when files are modified (default: enabled)
+- **Properties field name**: Customize the name of the property field (default: "mentions")
 
 ### Supported Mention Formats
 
