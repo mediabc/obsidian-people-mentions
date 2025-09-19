@@ -21,6 +21,8 @@ import {
     Setting
 } from 'obsidian';
 
+import * as yaml from 'js-yaml';
+
 import { EditorView, Decoration, DecorationSet, ViewUpdate } from '@codemirror/view';
 import { StateField, StateEffect } from '@codemirror/state';
 
@@ -336,55 +338,54 @@ export default class MentionsPlugin extends Plugin {
             
             let frontmatter: any = {};
             let bodyContent = content;
-            let frontmatterString = '';
             
             if (frontmatterMatch) {
-                frontmatterString = frontmatterMatch[1];
+                const frontmatterString = frontmatterMatch[1];
                 bodyContent = content.replace(frontmatterRegex, '');
                 
-                // Parse YAML frontmatter
+                // Parse YAML frontmatter using js-yaml
                 try {
-                    // Simple YAML parser for basic properties
-                    frontmatterString.split('\n').forEach(line => {
-                        const match = line.match(/^(\w+):\s*(.*)$/);
-                        if (match) {
-                            const [, key, value] = match;
-                            if (value.startsWith('[') && value.endsWith(']')) {
-                                // Parse array
-                                const arrayContent = value.slice(1, -1);
-                                if (arrayContent.trim()) {
-                                    frontmatter[key] = arrayContent.split(',').map(item => item.trim().replace(/['"]/g, ''));
-                                } else {
-                                    frontmatter[key] = [];
-                                }
-                            } else {
-                                frontmatter[key] = value.replace(/['"]/g, '');
-                            }
-                        }
-                    });
+                    frontmatter = yaml.load(frontmatterString) || {};
+                    // Ensure frontmatter is an object
+                    if (typeof frontmatter !== 'object' || frontmatter === null) {
+                        frontmatter = {};
+                    }
                 } catch (error) {
-                    this.debugLogger.log('Error parsing frontmatter:', error);
+                    this.debugLogger.log('Error parsing YAML frontmatter, using empty object:', error);
+                    frontmatter = {};
                 }
             }
             
-            // Update mentions in frontmatter
+            // Update mentions in frontmatter (only this field)
             frontmatter[this.settings.propertiesFieldName] = mentions;
             
-            // Build new frontmatter
-            const newFrontmatterLines = Object.entries(frontmatter).map(([key, value]) => {
-                if (Array.isArray(value)) {
-                    if (value.length === 0) {
-                        return `${key}: []`;
-                    }
-                    return `${key}: [${value.map(v => `"${v}"`).join(', ')}]`;
-                } else {
-                    return `${key}: "${value}"`;
+            // Convert back to YAML and build new content
+            let newFrontmatter = '';
+            try {
+                if (Object.keys(frontmatter).length > 0) {
+                    const yamlString = yaml.dump(frontmatter, {
+                        flowLevel: -1,
+                        quotingType: '"'
+                    });
+                    newFrontmatter = `---\n${yamlString}---\n`;
                 }
-            });
-            
-            const newFrontmatter = newFrontmatterLines.length > 0 
-                ? `---\n${newFrontmatterLines.join('\n')}\n---\n` 
-                : '';
+            } catch (error) {
+                this.debugLogger.log('Error converting to YAML:', error);
+                // Fallback to simple format
+                const newFrontmatterLines = Object.entries(frontmatter).map(([key, value]) => {
+                    if (Array.isArray(value)) {
+                        if (value.length === 0) {
+                            return `${key}: []`;
+                        }
+                        return `${key}: [${value.map(v => `"${v}"`).join(', ')}]`;
+                    } else {
+                        return `${key}: "${value}"`;
+                    }
+                });
+                newFrontmatter = newFrontmatterLines.length > 0 
+                    ? `---\n${newFrontmatterLines.join('\n')}\n---\n` 
+                    : '';
+            }
             
             const newContent = newFrontmatter + bodyContent;
             

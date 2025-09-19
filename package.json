@@ -1,6 +1,6 @@
 {
   "name": "obsidian-mentions",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "A plugin for handling @mentions in Obsidian notes",
   "main": "main.js",
   "scripts": {
@@ -16,6 +16,8 @@
   "author": "Your Name",
   "license": "MIT",
   "devDependencies": {
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/view": "^6.0.0",
     "@types/node": "^20.11.0",
     "@typescript-eslint/eslint-plugin": "^6.18.0",
     "@typescript-eslint/parser": "^6.18.0",
@@ -23,8 +25,10 @@
     "esbuild": "^0.19.11",
     "obsidian": "^1.4.11",
     "tslib": "^2.6.2",
-    "typescript": "^5.3.3",
-    "@codemirror/state": "^6.0.0",
-    "@codemirror/view": "^6.0.0"
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "js-yaml": "^4.1.0"
   }
 }
