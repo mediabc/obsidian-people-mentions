@@ -3058,7 +3058,7 @@ ${newFrontmatterLines.join("\n")}
   }
   searchMentions(mentionText) {
     const searchText = mentionText.startsWith("@") ? mentionText : "@" + mentionText;
-    console.log("Searching for mentions:", {
+    this.debugLogger.log("Searching for mentions:", {
       searchText,
       currentMentions: this.mentions,
       matchingMentions: this.mentions.filter((mention) => {
@@ -3072,9 +3072,9 @@ ${newFrontmatterLines.join("\n")}
     });
   }
   async showMentionResults(mentionText) {
-    console.log("Showing mention results for:", mentionText);
+    this.debugLogger.log("Showing mention results for:", mentionText);
     const results = this.searchMentions(mentionText);
-    console.log("Search results:", results);
+    this.debugLogger.log("Search results:", results);
     if (results.length > 0) {
       if (this.mentionsView) {
         await this.mentionsView.setMentions(results);
@@ -3109,7 +3109,7 @@ ${newFrontmatterLines.join("\n")}
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new MentionsSettingTab(this));
-    console.log("MentionsPlugin loading...");
+    this.debugLogger.log("MentionsPlugin loading...");
     const mentionStyles = document.createElement("style");
     mentionStyles.textContent = `
             .mention-tag {
@@ -3241,22 +3241,22 @@ ${newFrontmatterLines.join("\n")}
     });
     try {
       const savedMentions = await this.loadData();
-      console.log("Loading mentions from storage:", {
+      this.debugLogger.log("Loading mentions from storage:", {
         savedMentions,
         hasData: !!savedMentions,
         dataType: typeof savedMentions
       });
       if (savedMentions) {
         this.mentions = savedMentions;
-        console.log("Mentions loaded into memory:", this.mentions);
+        this.debugLogger.log("Mentions loaded into memory:", this.mentions);
       }
-      console.log("Processing existing files for mentions...");
+      this.debugLogger.log("Processing existing files for mentions...");
       const files = this.app.vault.getMarkdownFiles();
       for (const file of files) {
         const content = await this.app.vault.read(file);
         const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
         if (matches) {
-          console.log(`Found mentions in ${file.path}:`, matches);
+          this.debugLogger.log(`Found mentions in ${file.path}:`, matches);
           matches.forEach((match) => {
             const cleanMatch = match.replace(/^\s*/, "");
             const position = content.indexOf(match);
@@ -3274,7 +3274,7 @@ ${newFrontmatterLines.join("\n")}
         }
       }
       if (this.mentions.length > 0) {
-        console.log("Initial mentions found:", this.mentions);
+        this.debugLogger.log("Initial mentions found:", this.mentions);
         if (this.mentionsView) {
           await this.mentionsView.setMentions(this.mentions);
         }
@@ -3282,12 +3282,12 @@ ${newFrontmatterLines.join("\n")}
       }
       const processor = async (el, ctx) => {
         var _a;
-        console.log("MarkdownPostProcessor called for:", ctx.sourcePath);
-        console.log("Element content:", el.innerHTML);
-        console.log("Current mentions in memory:", this.mentions);
+        this.debugLogger.log("MarkdownPostProcessor called for:", ctx.sourcePath);
+        this.debugLogger.log("Element content:", el.innerHTML);
+        this.debugLogger.log("Current mentions in memory:", this.mentions);
         el.querySelectorAll(".mention-tag").forEach((el2) => el2.remove());
         const codeBlocks = el.querySelectorAll("code");
-        console.log("Found code blocks:", codeBlocks.length);
+        this.debugLogger.log("Found code blocks:", codeBlocks.length);
         codeBlocks.forEach((block) => {
           block.addClass("mentions-ignore");
         });
@@ -3299,7 +3299,7 @@ ${newFrontmatterLines.join("\n")}
               var _a2, _b, _c, _d;
               const isInCodeBlock = (_a2 = node2.parentElement) == null ? void 0 : _a2.closest(".mentions-ignore");
               const isInMention = (_b = node2.parentElement) == null ? void 0 : _b.hasClass("mention-tag");
-              console.log("Checking node:", {
+              this.debugLogger.log("Checking node:", {
                 text: node2.textContent,
                 isInCodeBlock,
                 isInMention,
@@ -3319,7 +3319,7 @@ ${newFrontmatterLines.join("\n")}
         while (node = walker.nextNode()) {
           nodeCount++;
           const matchResult = (_a = node.textContent) == null ? void 0 : _a.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
-          console.log(`Processing node ${nodeCount}:`, {
+          this.debugLogger.log(`Processing node ${nodeCount}:`, {
             text: node.textContent,
             matchResult
           });
@@ -3327,7 +3327,7 @@ ${newFrontmatterLines.join("\n")}
             nodesToProcess.push({ node, matches: matchResult });
           }
         }
-        console.log(`Found ${nodesToProcess.length} nodes with mentions`);
+        this.debugLogger.log(`Found ${nodesToProcess.length} nodes with mentions`);
         nodesToProcess.forEach(({ node: node2, matches }) => {
           let pos = 0;
           let text = node2.textContent || "";
@@ -3354,15 +3354,15 @@ ${newFrontmatterLines.join("\n")}
               (m) => m.text === cleanMatch && m.file === ctx.sourcePath && m.position === position
             );
             if (!exists) {
-              console.log("Adding new mention:", mention);
+              this.debugLogger.log("Adding new mention:", mention);
               this.mentions.push(mention);
               this.saveData(this.mentions);
             }
             const clickHandler = async (e) => {
-              console.log("Click handler called");
+              this.debugLogger.log("Click handler called");
               e.preventDefault();
               e.stopPropagation();
-              console.log("Mention clicked:", {
+              this.debugLogger.log("Mention clicked:", {
                 match: cleanMatch,
                 fullText: cleanMatch,
                 searchText: cleanMatch.slice(1)
@@ -3380,7 +3380,7 @@ ${newFrontmatterLines.join("\n")}
           node2.replaceWith(fragment);
         });
         if (nodesToProcess.length > 0) {
-          console.log("Found new mentions, current state:", {
+          this.debugLogger.log("Found new mentions, current state:", {
             newMentions: nodesToProcess.length,
             totalMentions: this.mentions.length,
             mentionsData: this.mentions
@@ -3388,9 +3388,9 @@ ${newFrontmatterLines.join("\n")}
           if (this.mentionsView) {
             this.mentionsView.setMentions(this.mentions);
           }
-          console.log("Saving mentions to storage...");
+          this.debugLogger.log("Saving mentions to storage...");
           await this.saveData(this.mentions);
-          console.log("Mentions saved successfully");
+          this.debugLogger.log("Mentions saved successfully");
         }
       };
       this.registerMarkdownPostProcessor(processor);
@@ -3401,13 +3401,13 @@ ${newFrontmatterLines.join("\n")}
               this.debugLogger.log("Skipping modify event for", file.path, "- currently updating properties");
               return;
             }
-            console.log("File modified:", file.path);
+            this.debugLogger.log("File modified:", file.path);
             const content = await this.app.vault.read(file);
-            console.log("Processing file content for mentions");
+            this.debugLogger.log("Processing file content for mentions");
             this.mentions = this.mentions.filter((m) => m.file !== file.path);
             const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
             if (matches) {
-              console.log("Found mentions in file:", matches);
+              this.debugLogger.log("Found mentions in file:", matches);
               matches.forEach((match) => {
                 const cleanMatch = match.replace(/^\s*/, "");
                 const position = content.indexOf(match);
@@ -3418,7 +3418,7 @@ ${newFrontmatterLines.join("\n")}
                 });
               });
             }
-            console.log("Updated mentions:", this.mentions);
+            this.debugLogger.log("Updated mentions:", this.mentions);
             if (this.mentionsView) {
               await this.mentionsView.setMentions(this.mentions);
             }
@@ -3435,12 +3435,12 @@ ${newFrontmatterLines.join("\n")}
       this.registerEvent(
         this.app.vault.on("delete", async (file) => {
           if (file instanceof import_obsidian.TFile && file.extension === "md") {
-            console.log("File deleted:", file.path);
+            this.debugLogger.log("File deleted:", file.path);
             const beforeCount = this.mentions.length;
             this.mentions = this.mentions.filter((m) => m.file !== file.path);
             const removedCount = beforeCount - this.mentions.length;
             if (removedCount > 0) {
-              console.log(`Removed ${removedCount} mentions from deleted file:`, file.path);
+              this.debugLogger.log(`Removed ${removedCount} mentions from deleted file:`, file.path);
               if (this.mentionsView) {
                 await this.mentionsView.setMentions(this.mentions);
               }
@@ -3452,7 +3452,7 @@ ${newFrontmatterLines.join("\n")}
       this.registerEvent(
         this.app.vault.on("create", async (file) => {
           if (file instanceof import_obsidian.TFile && file.extension === "md") {
-            console.log("New file created:", file.path);
+            this.debugLogger.log("New file created:", file.path);
             const content = await this.app.vault.read(file);
             const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
             if (matches) {
@@ -3482,7 +3482,7 @@ ${newFrontmatterLines.join("\n")}
       this.registerEvent(
         this.app.vault.on("rename", async (file, oldPath) => {
           if (file instanceof import_obsidian.TFile && file.extension === "md") {
-            console.log("File renamed:", { oldPath, newPath: file.path });
+            this.debugLogger.log("File renamed:", { oldPath, newPath: file.path });
             this.mentions = this.mentions.map(
               (mention) => mention.file === oldPath ? { ...mention, file: file.path } : mention
             );
@@ -3509,7 +3509,7 @@ ${newFrontmatterLines.join("\n")}
           }
         }
       });
-      console.log("MentionsPlugin loaded successfully");
+      this.debugLogger.log("MentionsPlugin loaded successfully");
     } catch (error) {
       console.error("Error during MentionsPlugin initialization:", error);
       new import_obsidian.Notice("Error initializing Mentions plugin");

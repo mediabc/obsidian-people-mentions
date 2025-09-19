@@ -535,7 +535,7 @@ export default class MentionsPlugin extends Plugin {
     searchMentions(mentionText: string): Mention[] {
         // Remove @ symbol if present
         const searchText = mentionText.startsWith('@') ? mentionText : '@' + mentionText;
-        console.log('Searching for mentions:', {
+        this.debugLogger.log('Searching for mentions:', {
             searchText,
             currentMentions: this.mentions,
             matchingMentions: this.mentions.filter(mention => {
@@ -551,9 +551,9 @@ export default class MentionsPlugin extends Plugin {
     }
 
     async showMentionResults(mentionText: string) {
-        console.log('Showing mention results for:', mentionText);
+        this.debugLogger.log('Showing mention results for:', mentionText);
         const results = this.searchMentions(mentionText);
-        console.log('Search results:', results);
+        this.debugLogger.log('Search results:', results);
         
         if (results.length > 0) {
             // Update the mentions view with search results
@@ -597,7 +597,7 @@ export default class MentionsPlugin extends Plugin {
         
         this.addSettingTab(new MentionsSettingTab(this));
         
-        console.log('MentionsPlugin loading...');
+        this.debugLogger.log('MentionsPlugin loading...');
 
         // Add CSS
         const mentionStyles = document.createElement('style');
@@ -743,7 +743,7 @@ export default class MentionsPlugin extends Plugin {
         try {
             // Load saved mentions
             const savedMentions = await this.loadData();
-            console.log('Loading mentions from storage:', {
+            this.debugLogger.log('Loading mentions from storage:', {
                 savedMentions,
                 hasData: !!savedMentions,
                 dataType: typeof savedMentions
@@ -751,17 +751,17 @@ export default class MentionsPlugin extends Plugin {
             
             if (savedMentions) {
                 this.mentions = savedMentions;
-                console.log('Mentions loaded into memory:', this.mentions);
+                this.debugLogger.log('Mentions loaded into memory:', this.mentions);
             }
 
             // Process all existing markdown files
-            console.log('Processing existing files for mentions...');
+            this.debugLogger.log('Processing existing files for mentions...');
             const files = this.app.vault.getMarkdownFiles();
             for (const file of files) {
                 const content = await this.app.vault.read(file);
                 const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
                 if (matches) {
-                    console.log(`Found mentions in ${file.path}:`, matches);
+                    this.debugLogger.log(`Found mentions in ${file.path}:`, matches);
                     matches.forEach(match => {
                         const cleanMatch = match.replace(/^\s*/, '');
                         const position = content.indexOf(match);
@@ -783,7 +783,7 @@ export default class MentionsPlugin extends Plugin {
             }
 
             if (this.mentions.length > 0) {
-                console.log('Initial mentions found:', this.mentions);
+                this.debugLogger.log('Initial mentions found:', this.mentions);
                 if (this.mentionsView) {
                     await this.mentionsView.setMentions(this.mentions);
                 }
@@ -792,15 +792,15 @@ export default class MentionsPlugin extends Plugin {
 
             // Register the markdown processor
             const processor = async (el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
-                console.log('MarkdownPostProcessor called for:', ctx.sourcePath);
-                console.log('Element content:', el.innerHTML);
-                console.log('Current mentions in memory:', this.mentions);
+                this.debugLogger.log('MarkdownPostProcessor called for:', ctx.sourcePath);
+                this.debugLogger.log('Element content:', el.innerHTML);
+                this.debugLogger.log('Current mentions in memory:', this.mentions);
 
                 // First, find all existing mention elements and remove them
                 el.querySelectorAll('.mention-tag').forEach(el => el.remove());
 
                 const codeBlocks = el.querySelectorAll('code');
-                console.log('Found code blocks:', codeBlocks.length);
+                this.debugLogger.log('Found code blocks:', codeBlocks.length);
                 
                 // Skip processing code blocks
                 codeBlocks.forEach(block => {
@@ -815,7 +815,7 @@ export default class MentionsPlugin extends Plugin {
                         acceptNode: function(node) {
                             const isInCodeBlock = node.parentElement?.closest('.mentions-ignore');
                             const isInMention = node.parentElement?.hasClass('mention-tag');
-                            console.log('Checking node:', {
+                            this.debugLogger.log('Checking node:', {
                                 text: node.textContent,
                                 isInCodeBlock,
                                 isInMention,
@@ -838,7 +838,7 @@ export default class MentionsPlugin extends Plugin {
                 while (node = walker.nextNode() as Text) {
                     nodeCount++;
                     const matchResult = node.textContent?.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
-                    console.log(`Processing node ${nodeCount}:`, {
+                    this.debugLogger.log(`Processing node ${nodeCount}:`, {
                         text: node.textContent,
                         matchResult
                     });
@@ -847,7 +847,7 @@ export default class MentionsPlugin extends Plugin {
                     }
                 }
 
-                console.log(`Found ${nodesToProcess.length} nodes with mentions`);
+                this.debugLogger.log(`Found ${nodesToProcess.length} nodes with mentions`);
 
                 nodesToProcess.forEach(({node, matches}) => {
                     let pos = 0;
@@ -886,16 +886,16 @@ export default class MentionsPlugin extends Plugin {
                         );
                         
                         if (!exists) {
-                            console.log('Adding new mention:', mention);
+                            this.debugLogger.log('Adding new mention:', mention);
                             this.mentions.push(mention);
                             this.saveData(this.mentions);
                         }
 
                         const clickHandler = async (e: MouseEvent) => {
-                            console.log('Click handler called');
+                            this.debugLogger.log('Click handler called');
                             e.preventDefault();
                             e.stopPropagation();
-                            console.log('Mention clicked:', {
+                            this.debugLogger.log('Mention clicked:', {
                                 match: cleanMatch,
                                 fullText: cleanMatch,
                                 searchText: cleanMatch.slice(1)
@@ -920,7 +920,7 @@ export default class MentionsPlugin extends Plugin {
 
                 // Update the view and save data if mentions were found
                 if (nodesToProcess.length > 0) {
-                    console.log('Found new mentions, current state:', {
+                    this.debugLogger.log('Found new mentions, current state:', {
                         newMentions: nodesToProcess.length,
                         totalMentions: this.mentions.length,
                         mentionsData: this.mentions
@@ -930,9 +930,9 @@ export default class MentionsPlugin extends Plugin {
                         this.mentionsView.setMentions(this.mentions);
                     }
                     
-                    console.log('Saving mentions to storage...');
+                    this.debugLogger.log('Saving mentions to storage...');
                     await this.saveData(this.mentions);
-                    console.log('Mentions saved successfully');
+                    this.debugLogger.log('Mentions saved successfully');
                 }
             };
 
@@ -949,11 +949,11 @@ export default class MentionsPlugin extends Plugin {
                             return;
                         }
                         
-                        console.log('File modified:', file.path);
+                        this.debugLogger.log('File modified:', file.path);
                         
                         // Get file content
                         const content = await this.app.vault.read(file);
-                        console.log('Processing file content for mentions');
+                        this.debugLogger.log('Processing file content for mentions');
                         
                         // Remove old mentions for this file
                         this.mentions = this.mentions.filter(m => m.file !== file.path);
@@ -961,7 +961,7 @@ export default class MentionsPlugin extends Plugin {
                         // Find all mentions in the file
                         const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
                         if (matches) {
-                            console.log('Found mentions in file:', matches);
+                            this.debugLogger.log('Found mentions in file:', matches);
                             
                             // Add new mentions
                             matches.forEach(match => {
@@ -975,7 +975,7 @@ export default class MentionsPlugin extends Plugin {
                             });
                         }
                         
-                        console.log('Updated mentions:', this.mentions);
+                        this.debugLogger.log('Updated mentions:', this.mentions);
                         
                         // Update view and save
                         if (this.mentionsView) {
@@ -998,7 +998,7 @@ export default class MentionsPlugin extends Plugin {
             this.registerEvent(
                 this.app.vault.on("delete", async (file) => {
                     if (file instanceof TFile && file.extension === 'md') {
-                        console.log('File deleted:', file.path);
+                        this.debugLogger.log('File deleted:', file.path);
                         
                         // Remove all mentions from the deleted file
                         const beforeCount = this.mentions.length;
@@ -1006,7 +1006,7 @@ export default class MentionsPlugin extends Plugin {
                         const removedCount = beforeCount - this.mentions.length;
                         
                         if (removedCount > 0) {
-                            console.log(`Removed ${removedCount} mentions from deleted file:`, file.path);
+                            this.debugLogger.log(`Removed ${removedCount} mentions from deleted file:`, file.path);
                             
                             // Update view and save
                             if (this.mentionsView) {
@@ -1022,7 +1022,7 @@ export default class MentionsPlugin extends Plugin {
             this.registerEvent(
                 this.app.vault.on("create", async (file) => {
                     if (file instanceof TFile && file.extension === 'md') {
-                        console.log('New file created:', file.path);
+                        this.debugLogger.log('New file created:', file.path);
                         const content = await this.app.vault.read(file);
                         const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
                         if (matches) {
@@ -1058,7 +1058,7 @@ export default class MentionsPlugin extends Plugin {
             this.registerEvent(
                 this.app.vault.on("rename", async (file, oldPath) => {
                     if (file instanceof TFile && file.extension === 'md') {
-                        console.log('File renamed:', { oldPath, newPath: file.path });
+                        this.debugLogger.log('File renamed:', { oldPath, newPath: file.path });
                         
                         // Update file paths in mentions
                         this.mentions = this.mentions.map(mention => 
@@ -1099,7 +1099,7 @@ export default class MentionsPlugin extends Plugin {
                 }
             });
 
-            console.log('MentionsPlugin loaded successfully');
+            this.debugLogger.log('MentionsPlugin loaded successfully');
         } catch (error) {
             console.error('Error during MentionsPlugin initialization:', error);
             new Notice('Error initializing Mentions plugin');
