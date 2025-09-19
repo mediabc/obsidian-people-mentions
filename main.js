@@ -2865,7 +2865,9 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
     super(...arguments);
     this.mentions = [];
     this.editorDecorations = /* @__PURE__ */ new Map();
+    this.updatingProperties = /* @__PURE__ */ new Set();
   }
+  // Track files being updated to prevent loops
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     this.debugLogger = new DebugLogger(this.settings.debugMode);
@@ -2896,6 +2898,11 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
    */
   async updateFileProperties(file, mentions) {
     try {
+      if (this.updatingProperties.has(file.path)) {
+        this.debugLogger.log("Skipping property update for", file.path, "- already updating");
+        return;
+      }
+      this.updatingProperties.add(file.path);
       this.debugLogger.log("Updating file properties for:", file.path, "with mentions:", mentions);
       const content = await this.app.vault.read(file);
       const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
@@ -2950,6 +2957,8 @@ ${newFrontmatterLines.join("\n")}
     } catch (error) {
       console.error("Error updating file properties:", error);
       new import_obsidian.Notice(`Error updating properties for ${file.name}: ${error.message}`);
+    } finally {
+      this.updatingProperties.delete(file.path);
     }
   }
   /**
@@ -3329,6 +3338,10 @@ ${newFrontmatterLines.join("\n")}
       this.registerEvent(
         this.app.vault.on("modify", async (file) => {
           if (file instanceof import_obsidian.TFile && file.extension === "md") {
+            if (this.updatingProperties.has(file.path)) {
+              this.debugLogger.log("Skipping modify event for", file.path, "- currently updating properties");
+              return;
+            }
             console.log("File modified:", file.path);
             const content = await this.app.vault.read(file);
             console.log("Processing file content for mentions");

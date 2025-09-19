@@ -291,6 +291,7 @@ export default class MentionsPlugin extends Plugin {
     private editorDecorations: Map<string, DecorationSet> = new Map();
     settings: MentionsPluginSettings;
     debugLogger: DebugLogger;
+    private updatingProperties: Set<string> = new Set(); // Track files being updated to prevent loops
 
     async loadSettings() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -327,6 +328,13 @@ export default class MentionsPlugin extends Plugin {
      */
     async updateFileProperties(file: TFile, mentions: string[]): Promise<void> {
         try {
+            // Prevent infinite loops
+            if (this.updatingProperties.has(file.path)) {
+                this.debugLogger.log('Skipping property update for', file.path, '- already updating');
+                return;
+            }
+            
+            this.updatingProperties.add(file.path);
             this.debugLogger.log('Updating file properties for:', file.path, 'with mentions:', mentions);
             
             // Read current file content
@@ -396,6 +404,9 @@ export default class MentionsPlugin extends Plugin {
         } catch (error) {
             console.error('Error updating file properties:', error);
             new Notice(`Error updating properties for ${file.name}: ${error.message}`);
+        } finally {
+            // Always remove the file from updating set
+            this.updatingProperties.delete(file.path);
         }
     }
 
@@ -864,6 +875,12 @@ export default class MentionsPlugin extends Plugin {
             this.registerEvent(
                 this.app.vault.on("modify", async (file) => {
                     if (file instanceof TFile && file.extension === 'md') {
+                        // Skip if we're currently updating properties for this file
+                        if (this.updatingProperties.has(file.path)) {
+                            this.debugLogger.log('Skipping modify event for', file.path, '- currently updating properties');
+                            return;
+                        }
+                        
                         console.log('File modified:', file.path);
                         
                         // Get file content
