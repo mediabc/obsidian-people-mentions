@@ -2792,6 +2792,7 @@ var MentionsView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.mentions = [];
+    this.sortBy = "alphabetical";
     this.plugin = plugin;
   }
   getViewType() {
@@ -2832,13 +2833,41 @@ var MentionsView = class extends import_obsidian.ItemView {
       await this.plugin.updateMentionsForAllFiles();
       updatePropertiesButton.removeClass("refreshing");
     });
+    const sortContainer = container.createEl("div", { cls: "mentions-sort-container" });
+    sortContainer.createEl("span", {
+      text: "\u0421\u043E\u0440\u0442\u0438\u0440\u043E\u0432\u043A\u0430:",
+      cls: "mentions-sort-label"
+    });
+    const sortSelect = sortContainer.createEl("select", { cls: "mentions-sort-select" });
+    const alphabeticalOption = sortSelect.createEl("option", {
+      text: "\u041F\u043E \u0430\u043B\u0444\u0430\u0432\u0438\u0442\u0443",
+      value: "alphabetical"
+    });
+    const countOption = sortSelect.createEl("option", {
+      text: "\u041F\u043E \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u0443 \u0443\u043F\u043E\u043C\u0438\u043D\u0430\u043D\u0438\u0439",
+      value: "count"
+    });
+    sortSelect.value = this.sortBy;
+    sortSelect.addEventListener("change", async () => {
+      this.sortBy = sortSelect.value;
+      await this.refresh();
+    });
     const mentionGroups = /* @__PURE__ */ new Map();
     this.mentions.forEach((mention) => {
       const existingGroup = mentionGroups.get(mention.text) || [];
       mentionGroups.set(mention.text, [...existingGroup, mention]);
     });
     const mentionsList = container.createEl("ul", { cls: "mentions-list" });
-    const sortedMentions = Array.from(mentionGroups.entries()).sort(([a], [b]) => a.localeCompare(b));
+    let sortedMentions;
+    if (this.sortBy === "alphabetical") {
+      sortedMentions = Array.from(mentionGroups.entries()).sort(([a], [b]) => a.localeCompare(b));
+    } else {
+      sortedMentions = Array.from(mentionGroups.entries()).sort(([, mentionsA], [, mentionsB]) => {
+        const uniqueFilesA = new Set(mentionsA.map((m) => m.file)).size;
+        const uniqueFilesB = new Set(mentionsB.map((m) => m.file)).size;
+        return uniqueFilesB - uniqueFilesA;
+      });
+    }
     sortedMentions.forEach(([mentionText, mentions]) => {
       const uniqueFiles = new Set(mentions.map((m) => m.file));
       const fileCount = uniqueFiles.size;
@@ -3142,6 +3171,36 @@ ${newFrontmatterLines.join("\n")}
             .mentions-update-properties-button.refreshing {
                 opacity: 0.6;
                 cursor: not-allowed;
+            }
+            .mentions-sort-container {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-bottom: 16px;
+                padding: 8px;
+                background: var(--background-secondary);
+                border-radius: 4px;
+            }
+            .mentions-sort-label {
+                color: var(--text-normal);
+                font-size: 0.9em;
+                font-weight: 500;
+            }
+            .mentions-sort-select {
+                padding: 4px 8px;
+                border: 1px solid var(--background-modifier-border);
+                border-radius: 4px;
+                background: var(--background-primary);
+                color: var(--text-normal);
+                cursor: pointer;
+                font-size: 0.9em;
+            }
+            .mentions-sort-select:hover {
+                border-color: var(--background-modifier-border-hover);
+            }
+            .mentions-sort-select:focus {
+                outline: none;
+                border-color: var(--interactive-accent);
             }
         `;
     document.head.appendChild(mentionStyles);

@@ -186,6 +186,7 @@ class MentionSuggest extends EditorSuggest<string> {
 class MentionsView extends ItemView {
     mentions: Mention[] = [];
     plugin: MentionsPlugin;
+    private sortBy: 'alphabetical' | 'count' = 'alphabetical';
 
     constructor(leaf: WorkspaceLeaf, plugin: MentionsPlugin) {
         super(leaf);
@@ -244,6 +245,33 @@ class MentionsView extends ItemView {
             updatePropertiesButton.removeClass("refreshing");
         });
 
+        // Add sorting controls
+        const sortContainer = container.createEl("div", { cls: "mentions-sort-container" });
+        
+        sortContainer.createEl("span", { 
+            text: "Сортировка:", 
+            cls: "mentions-sort-label" 
+        });
+        
+        const sortSelect = sortContainer.createEl("select", { cls: "mentions-sort-select" });
+        
+        const alphabeticalOption = sortSelect.createEl("option", { 
+            text: "По алфавиту",
+            value: "alphabetical"
+        });
+        
+        const countOption = sortSelect.createEl("option", { 
+            text: "По количеству упоминаний",
+            value: "count"
+        });
+        
+        sortSelect.value = this.sortBy;
+        
+        sortSelect.addEventListener("change", async () => {
+            this.sortBy = sortSelect.value as 'alphabetical' | 'count';
+            await this.refresh();
+        });
+
         // Group mentions by text
         const mentionGroups = new Map<string, Mention[]>();
         this.mentions.forEach(mention => {
@@ -253,8 +281,18 @@ class MentionsView extends ItemView {
 
         const mentionsList = container.createEl("ul", { cls: "mentions-list" });
 
-        // Sort mentions alphabetically
-        const sortedMentions = Array.from(mentionGroups.entries()).sort(([a], [b]) => a.localeCompare(b));
+        // Sort mentions based on selected option
+        let sortedMentions: [string, Mention[]][];
+        
+        if (this.sortBy === 'alphabetical') {
+            sortedMentions = Array.from(mentionGroups.entries()).sort(([a], [b]) => a.localeCompare(b));
+        } else { // sort by count
+            sortedMentions = Array.from(mentionGroups.entries()).sort(([, mentionsA], [, mentionsB]) => {
+                const uniqueFilesA = new Set(mentionsA.map(m => m.file)).size;
+                const uniqueFilesB = new Set(mentionsB.map(m => m.file)).size;
+                return uniqueFilesB - uniqueFilesA; // Descending order (most mentions first)
+            });
+        }
 
         sortedMentions.forEach(([mentionText, mentions]) => {
             const uniqueFiles = new Set(mentions.map(m => m.file));
@@ -623,6 +661,36 @@ export default class MentionsPlugin extends Plugin {
             .mentions-update-properties-button.refreshing {
                 opacity: 0.6;
                 cursor: not-allowed;
+            }
+            .mentions-sort-container {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-bottom: 16px;
+                padding: 8px;
+                background: var(--background-secondary);
+                border-radius: 4px;
+            }
+            .mentions-sort-label {
+                color: var(--text-normal);
+                font-size: 0.9em;
+                font-weight: 500;
+            }
+            .mentions-sort-select {
+                padding: 4px 8px;
+                border: 1px solid var(--background-modifier-border);
+                border-radius: 4px;
+                background: var(--background-primary);
+                color: var(--text-normal);
+                cursor: pointer;
+                font-size: 0.9em;
+            }
+            .mentions-sort-select:hover {
+                border-color: var(--background-modifier-border-hover);
+            }
+            .mentions-sort-select:focus {
+                outline: none;
+                border-color: var(--interactive-accent);
             }
         `;
         document.head.appendChild(mentionStyles);
