@@ -1102,16 +1102,9 @@ export default class MentionsPlugin extends Plugin {
                     el,
                     NodeFilter.SHOW_TEXT,
                     {
-                        acceptNode: function(node) {
+                        acceptNode: (node) => {
                             const isInCodeBlock = node.parentElement?.closest('.mentions-ignore');
                             const isInMention = node.parentElement?.hasClass('mention-tag');
-                            this.debugLogger.log('Checking node:', {
-                                text: node.textContent,
-                                isInCodeBlock,
-                                isInMention,
-                                parentElement: node.parentElement?.tagName,
-                                classList: node.parentElement?.className
-                            });
                             // Skip nodes that are children of code blocks or existing mentions
                             if (isInCodeBlock || isInMention) {
                                 return NodeFilter.FILTER_REJECT;

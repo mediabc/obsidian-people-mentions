@@ -3509,17 +3509,10 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
           el,
           NodeFilter.SHOW_TEXT,
           {
-            acceptNode: function(node2) {
-              var _a2, _b, _c, _d;
+            acceptNode: (node2) => {
+              var _a2, _b;
               const isInCodeBlock = (_a2 = node2.parentElement) == null ? void 0 : _a2.closest(".mentions-ignore");
               const isInMention = (_b = node2.parentElement) == null ? void 0 : _b.hasClass("mention-tag");
-              this.debugLogger.log("Checking node:", {
-                text: node2.textContent,
-                isInCodeBlock,
-                isInMention,
-                parentElement: (_c = node2.parentElement) == null ? void 0 : _c.tagName,
-                classList: (_d = node2.parentElement) == null ? void 0 : _d.className
-              });
               if (isInCodeBlock || isInMention) {
                 return NodeFilter.FILTER_REJECT;
               }
