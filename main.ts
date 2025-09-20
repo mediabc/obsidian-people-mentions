@@ -599,38 +599,9 @@ export default class MentionsPlugin extends Plugin {
         
         this.debugLogger.log('MentionsPlugin loading...');
 
-        // Add CSS
+        // Add CSS for UI components (mention-tag styles are in styles.css)
         const mentionStyles = document.createElement('style');
         mentionStyles.textContent = `
-            .mention-tag {
-                /* Используем CSS переменные Obsidian для тегов с кастомным голубым цветом */
-                color: #4a9eff;
-                background-color: rgba(74, 158, 255, 0.1);
-                border: var(--tag-border-width) solid rgba(74, 158, 255, 0.2);
-                border-radius: var(--tag-radius);
-                font-size: var(--tag-size);
-                font-weight: var(--tag-weight);
-                padding-top: var(--tag-padding-y);
-                padding-bottom: var(--tag-padding-y);
-                padding-inline-start: var(--tag-padding-x);
-                padding-inline-end: var(--tag-padding-x);
-                cursor: pointer;
-                display: inline-block;
-                vertical-align: baseline;
-                text-decoration: none;
-                white-space: nowrap;
-                line-height: normal;
-            }
-            .mentions-list-item {
-                padding: 8px;
-                margin: 4px 0;
-                border-radius: 4px;
-                cursor: pointer;
-                transition: background-color 0.2s ease;
-            }
-            .mentions-list-item:hover {
-                background-color: var(--background-modifier-border);
-            }
             .mention-file-count {
                 color: var(--text-muted);
                 font-size: 0.9em;
@@ -869,7 +840,6 @@ export default class MentionsPlugin extends Plugin {
 
                         // Create the mention element
                         const mentionEl = document.createElement('span');
-                        mentionEl.addClass('mention');
                         mentionEl.addClass('mention-tag');
                         mentionEl.textContent = cleanMatch;
                         mentionEl.style.cursor = 'pointer';
@@ -1132,7 +1102,7 @@ export default class MentionsPlugin extends Plugin {
                         if (start >= 0) {
                             const end = start + cleanMatch.length;
                             const mentionMark = Decoration.mark({
-                                class: "mention mention-tag",
+                                class: "mention-tag",
                                 attributes: { "data-mention": cleanMatch }
                             });
                             decorationArray.push(mentionMark.range(start, end));
