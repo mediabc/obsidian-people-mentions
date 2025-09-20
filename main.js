@@ -2734,6 +2734,8 @@ var VIEW_TYPE_MENTIONS = "mentions-view";
 var MentionSuggest = class extends import_obsidian.EditorSuggest {
   constructor(plugin) {
     super(plugin.app);
+    this.lastMentionInput = "";
+    this.lastCursorPosition = null;
     this.plugin = plugin;
   }
   onTrigger(cursor, editor, file) {
@@ -2741,6 +2743,13 @@ var MentionSuggest = class extends import_obsidian.EditorSuggest {
     const subString = line.substring(0, cursor.ch);
     const match = subString.match(/(?:^|\s)(@[a-zа-я.-]*)$/);
     this.plugin.debugLogger.log("MentionSuggest.onTrigger:", { line, subString, match });
+    if (this.lastCursorPosition && file) {
+      this.checkForCompletedMention(cursor, editor, file);
+    }
+    this.lastCursorPosition = cursor;
+    if (match) {
+      this.lastMentionInput = match[1];
+    }
     if (!match)
       return null;
     return {
@@ -2751,6 +2760,16 @@ var MentionSuggest = class extends import_obsidian.EditorSuggest {
       end: cursor,
       query: match[1].slice(1)
     };
+  }
+  async checkForCompletedMention(cursor, editor, file) {
+    const line = editor.getLine(cursor.line);
+    const subString = line.substring(0, cursor.ch);
+    const currentMatch = subString.match(/(?:^|\s)(@[a-zа-я.-]*)$/);
+    if (!currentMatch && this.lastMentionInput) {
+      this.plugin.debugLogger.log("Potential mention completion detected, last input was:", this.lastMentionInput);
+      this.plugin.schedulePropertyUpdate(file, 1e3);
+      this.lastMentionInput = "";
+    }
   }
   getSuggestions(context) {
     const query = context.query.toLowerCase();
@@ -2785,6 +2804,11 @@ var MentionSuggest = class extends import_obsidian.EditorSuggest {
         ch: context.start.ch + value.length + 1
       };
       editor.setCursor(newCursorPos);
+      const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+      if (view && view.file) {
+        this.plugin.debugLogger.log("Suggestion selected:", "@" + value);
+        this.plugin.schedulePropertyUpdate(view.file, 1e3);
+      }
     }
   }
 };
@@ -2895,8 +2919,10 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
     this.mentions = [];
     this.editorDecorations = /* @__PURE__ */ new Map();
     this.updatingProperties = /* @__PURE__ */ new Set();
+    // Track files being updated to prevent loops
+    this.pendingPropertyUpdates = /* @__PURE__ */ new Map();
   }
-  // Track files being updated to prevent loops
+  // Track pending updates
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     this.debugLogger = new DebugLogger(this.settings.debugMode);
@@ -2912,15 +2938,41 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
    * Extract mentions from file content
    */
   extractMentionsFromContent(content) {
-    const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)(?=\s|$|[^\w.-])/g);
+    const matches = content.match(/@[a-zа-я.-]+/g);
     if (!matches)
       return [];
     const mentions = matches.map((match) => {
-      const cleanMatch = match.replace(/^\s*/, "");
-      const mention = cleanMatch.substring(1);
+      const mention = match.substring(1);
       return mention.replace(/[.,!?;:]+$/, "");
     });
-    return [...new Set(mentions)];
+    return [...new Set(mentions.filter((m) => m.length > 0))];
+  }
+  /**
+   * Schedule a delayed properties update, canceling any previous pending update for the same file
+   */
+  schedulePropertyUpdate(file, delay = 1e3) {
+    if (!this.settings.autoUpdateProperties)
+      return;
+    const filePath = file.path;
+    const existingTimeout = this.pendingPropertyUpdates.get(filePath);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+      this.debugLogger.log("Cancelled previous property update for:", filePath);
+    }
+    const timeout = setTimeout(async () => {
+      try {
+        const currentContent = await this.app.vault.read(file);
+        const mentions = this.extractMentionsFromContent(currentContent);
+        await this.updateFileProperties(file, mentions);
+        this.debugLogger.log("Scheduled property update completed for:", filePath, "with mentions:", mentions);
+      } catch (error) {
+        console.error("Error in scheduled property update:", error);
+      } finally {
+        this.pendingPropertyUpdates.delete(filePath);
+      }
+    }, delay);
+    this.pendingPropertyUpdates.set(filePath, timeout);
+    this.debugLogger.log("Scheduled property update for:", filePath, "in", delay, "ms");
   }
   /**
    * Update file properties with mentions
@@ -3025,16 +3077,37 @@ ${newFrontmatterLines.join("\n")}
       new import_obsidian.Notice("Error updating mentions for all files");
     }
   }
+  /**
+   * Check if user just completed typing a mention by pressing space, enter, or punctuation
+   */
+  async checkForMentionCompletion(view) {
+    if (!this.settings.autoUpdateProperties || !view.file)
+      return;
+    const editor = view.editor;
+    const cursor = editor.getCursor();
+    const line = editor.getLine(cursor.line);
+    this.debugLogger.log("Checking for mention completion:", {
+      line,
+      cursorPos: cursor.ch,
+      lineLength: line.length
+    });
+    const mentionPattern = /@[a-zа-я.-]+/g;
+    const matches = Array.from(line.matchAll(mentionPattern));
+    if (matches.length > 0) {
+      this.debugLogger.log("Found completed mentions in line, scheduling update:", matches.map((m) => m[0]));
+      this.schedulePropertyUpdate(view.file, 1e3);
+    }
+  }
   async refreshAllMentions() {
     this.debugLogger.log("Starting full mentions refresh...");
     this.mentions = [];
     const files = this.app.vault.getMarkdownFiles();
     for (const file of files) {
       const content = await this.app.vault.read(file);
-      const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+      const matches = content.match(/@[a-zа-я.-]+/g);
       if (matches) {
         matches.forEach((match) => {
-          const cleanMatch = match.replace(/^\s*/, "");
+          const cleanMatch = match;
           const position = content.indexOf(match);
           const exists = this.mentions.some(
             (m) => m.text === cleanMatch && m.file === file.path && m.position === position
@@ -3186,6 +3259,16 @@ ${newFrontmatterLines.join("\n")}
     );
     this.mentionSuggest = new MentionSuggest(this);
     this.registerEditorSuggest(this.mentionSuggest);
+    this.registerDomEvent(document, "keyup", (evt) => {
+      if (evt.key === " " || evt.key === "Enter" || /[.,!?;:]/.test(evt.key)) {
+        const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+        if (activeView && activeView.file) {
+          setTimeout(() => {
+            this.checkForMentionCompletion(activeView);
+          }, 100);
+        }
+      }
+    });
     this.registerEditorExtension([
       this.decorateMentions()
     ]);
@@ -3230,7 +3313,7 @@ ${newFrontmatterLines.join("\n")}
       const files = this.app.vault.getMarkdownFiles();
       for (const file of files) {
         const content = await this.app.vault.read(file);
-        const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+        const matches = content.match(/@[a-zа-я.-]+/g);
         if (matches) {
           this.debugLogger.log(`Found mentions in ${file.path}:`, matches);
           matches.forEach((match) => {
@@ -3294,7 +3377,7 @@ ${newFrontmatterLines.join("\n")}
         let nodeCount = 0;
         while (node = walker.nextNode()) {
           nodeCount++;
-          const matchResult = (_a = node.textContent) == null ? void 0 : _a.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+          const matchResult = (_a = node.textContent) == null ? void 0 : _a.match(/@[a-zа-я.-]+/g);
           this.debugLogger.log(`Processing node ${nodeCount}:`, {
             text: node.textContent,
             matchResult
@@ -3309,24 +3392,23 @@ ${newFrontmatterLines.join("\n")}
           let text = node2.textContent || "";
           const fragment = document.createDocumentFragment();
           matches.forEach((match) => {
-            const cleanMatch = match.replace(/^\s*/, "");
             const beforeText = text.slice(pos, text.indexOf(match, pos));
             if (beforeText) {
               fragment.append(beforeText);
             }
             const mentionEl = document.createElement("span");
             mentionEl.addClass("mention-tag");
-            mentionEl.textContent = cleanMatch;
+            mentionEl.textContent = match;
             mentionEl.style.cursor = "pointer";
-            mentionEl.setAttribute("data-mention", cleanMatch);
+            mentionEl.setAttribute("data-mention", match);
             const position = text.indexOf(match, pos);
             const mention = {
-              text: cleanMatch,
+              text: match,
               file: ctx.sourcePath,
               position
             };
             const exists = this.mentions.some(
-              (m) => m.text === cleanMatch && m.file === ctx.sourcePath && m.position === position
+              (m) => m.text === match && m.file === ctx.sourcePath && m.position === position
             );
             if (!exists) {
               this.debugLogger.log("Adding new mention:", mention);
@@ -3338,11 +3420,11 @@ ${newFrontmatterLines.join("\n")}
               e.preventDefault();
               e.stopPropagation();
               this.debugLogger.log("Mention clicked:", {
-                match: cleanMatch,
-                fullText: cleanMatch,
-                searchText: cleanMatch.slice(1)
+                match,
+                fullText: match,
+                searchText: match.slice(1)
               });
-              await this.showMentionResults(cleanMatch.slice(1));
+              await this.showMentionResults(match.slice(1));
             };
             mentionEl.removeEventListener("click", clickHandler);
             mentionEl.addEventListener("click", clickHandler);
@@ -3380,7 +3462,7 @@ ${newFrontmatterLines.join("\n")}
             const content = await this.app.vault.read(file);
             this.debugLogger.log("Processing file content for mentions");
             this.mentions = this.mentions.filter((m) => m.file !== file.path);
-            const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+            const matches = content.match(/@[a-zа-я.-]+/g);
             if (matches) {
               this.debugLogger.log("Found mentions in file:", matches);
               matches.forEach((match) => {
@@ -3398,12 +3480,6 @@ ${newFrontmatterLines.join("\n")}
               await this.mentionsView.setMentions(this.mentions);
             }
             await this.saveData(this.mentions);
-            if (this.settings.autoUpdateProperties) {
-              const fileMentions = this.extractMentionsFromContent(content);
-              if (fileMentions.length > 0) {
-                await this.updateFileProperties(file, fileMentions);
-              }
-            }
           }
         })
       );
@@ -3429,7 +3505,7 @@ ${newFrontmatterLines.join("\n")}
           if (file instanceof import_obsidian.TFile && file.extension === "md") {
             this.debugLogger.log("New file created:", file.path);
             const content = await this.app.vault.read(file);
-            const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+            const matches = content.match(/@[a-zа-я.-]+/g);
             if (matches) {
               matches.forEach((match) => {
                 const cleanMatch = match.replace(/^\s*/, "");
@@ -3444,12 +3520,6 @@ ${newFrontmatterLines.join("\n")}
                 await this.mentionsView.setMentions(this.mentions);
               }
               await this.saveData(this.mentions);
-              if (this.settings.autoUpdateProperties) {
-                const fileMentions = this.extractMentionsFromContent(content);
-                if (fileMentions.length > 0) {
-                  await this.updateFileProperties(file, fileMentions);
-                }
-              }
             }
           }
         })
@@ -3491,6 +3561,10 @@ ${newFrontmatterLines.join("\n")}
     }
   }
   onunload() {
+    this.pendingPropertyUpdates.forEach((timeout) => {
+      clearTimeout(timeout);
+    });
+    this.pendingPropertyUpdates.clear();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_MENTIONS);
   }
   decorateMentions() {
@@ -3498,19 +3572,17 @@ ${newFrontmatterLines.join("\n")}
       create: () => import_view.Decoration.none,
       update: (decorations, tr) => {
         const text = tr.state.doc.toString();
-        const matches = text.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+        const matches = text.match(/@[a-zа-я.-]+/g);
         const decorationArray = [];
         if (matches) {
           let pos = 0;
           matches.forEach((match) => {
-            const fullMatch = match;
-            const cleanMatch = match.replace(/^\s*/, "");
-            const start = text.indexOf(fullMatch, pos) + (fullMatch.length - cleanMatch.length);
+            const start = text.indexOf(match, pos);
             if (start >= 0) {
-              const end = start + cleanMatch.length;
+              const end = start + match.length;
               const mentionMark = import_view.Decoration.mark({
                 class: "mention-tag",
-                attributes: { "data-mention": cleanMatch }
+                attributes: { "data-mention": match }
               });
               decorationArray.push(mentionMark.range(start, end));
               pos = end;

@@ -112,6 +112,8 @@ const VIEW_TYPE_MENTIONS = "mentions-view";
 
 class MentionSuggest extends EditorSuggest<string> {
     plugin: MentionsPlugin;
+    private lastMentionInput: string = '';
+    private lastCursorPosition: EditorPosition | null = null;
 
     constructor(plugin: MentionsPlugin) {
         super(plugin.app);
@@ -125,6 +127,17 @@ class MentionSuggest extends EditorSuggest<string> {
 
         this.plugin.debugLogger.log('MentionSuggest.onTrigger:', { line, subString, match });
 
+        // Check if we just completed a mention (typed space after a complete mention)
+        if (this.lastCursorPosition && file) {
+            this.checkForCompletedMention(cursor, editor, file);
+        }
+
+        // Store current state for next check
+        this.lastCursorPosition = cursor;
+        if (match) {
+            this.lastMentionInput = match[1];
+        }
+
         if (!match) return null;
 
         return {
@@ -135,6 +148,24 @@ class MentionSuggest extends EditorSuggest<string> {
             end: cursor,
             query: match[1].slice(1),
         };
+    }
+
+    private async checkForCompletedMention(cursor: EditorPosition, editor: Editor, file: TFile): Promise<void> {
+        // Simplified logic: check if we moved away from a mention and there was a previous mention input
+        const line = editor.getLine(cursor.line);
+        const subString = line.substring(0, cursor.ch);
+        const currentMatch = subString.match(/(?:^|\s)(@[a-zа-я.-]*)$/);
+        
+        // If there's no current mention being typed but we had one before, check for completion
+        if (!currentMatch && this.lastMentionInput) {
+            this.plugin.debugLogger.log('Potential mention completion detected, last input was:', this.lastMentionInput);
+            
+            // Schedule property update with delay - let the user finish their thought
+                this.plugin.schedulePropertyUpdate(file, 1000);
+            
+            // Reset tracking
+            this.lastMentionInput = '';
+        }
     }
 
     getSuggestions(context: EditorSuggestContext): string[] {
@@ -179,6 +210,14 @@ class MentionSuggest extends EditorSuggest<string> {
                 ch: context.start.ch + value.length + 1
             };
             editor.setCursor(newCursorPos);
+            
+            // Trigger properties update after selecting a suggestion
+            const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+            if (view && view.file) {
+                this.plugin.debugLogger.log('Suggestion selected:', '@' + value);
+                // Use the new scheduled update method with longer delay
+                this.plugin.schedulePropertyUpdate(view.file, 1000);
+            }
         }
     }
 }
@@ -330,6 +369,7 @@ export default class MentionsPlugin extends Plugin {
     settings: MentionsPluginSettings;
     debugLogger: DebugLogger;
     private updatingProperties: Set<string> = new Set(); // Track files being updated to prevent loops
+    private pendingPropertyUpdates: Map<string, NodeJS.Timeout> = new Map(); // Track pending updates
 
     async loadSettings() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -349,16 +389,55 @@ export default class MentionsPlugin extends Plugin {
      * Extract mentions from file content
      */
     extractMentionsFromContent(content: string): string[] {
-        const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)(?=\s|$|[^\w.-])/g);
+        // Updated regex to better handle mentions followed by other mentions or special characters
+        const matches = content.match(/@[a-zа-я.-]+/g);
         if (!matches) return [];
         
         const mentions = matches.map(match => {
-            const cleanMatch = match.replace(/^\s*/, ''); // Remove leading whitespace
-            const mention = cleanMatch.substring(1); // Remove @ symbol
-            // Remove trailing punctuation
+            // Remove @ symbol and any trailing punctuation that's not part of the mention
+            const mention = match.substring(1);
             return mention.replace(/[.,!?;:]+$/, '');
         });
-        return [...new Set(mentions)]; // Remove duplicates
+        
+        // Filter out empty mentions and remove duplicates
+        return [...new Set(mentions.filter(m => m.length > 0))];
+    }
+
+    /**
+     * Schedule a delayed properties update, canceling any previous pending update for the same file
+     */
+    schedulePropertyUpdate(file: TFile, delay: number = 1000): void {
+        if (!this.settings.autoUpdateProperties) return;
+
+        const filePath = file.path;
+        
+        // Cancel any existing pending update for this file
+        const existingTimeout = this.pendingPropertyUpdates.get(filePath);
+        if (existingTimeout) {
+            clearTimeout(existingTimeout);
+            this.debugLogger.log('Cancelled previous property update for:', filePath);
+        }
+        
+        // Schedule new update with longer delay for stability
+        const timeout = setTimeout(async () => {
+            try {
+                // Double-check that the file still exists and hasn't been modified recently
+                const currentContent = await this.app.vault.read(file);
+                const mentions = this.extractMentionsFromContent(currentContent);
+                
+                // Always update properties, even if no mentions (to clear old ones)
+                await this.updateFileProperties(file, mentions);
+                this.debugLogger.log('Scheduled property update completed for:', filePath, 'with mentions:', mentions);
+            } catch (error) {
+                console.error('Error in scheduled property update:', error);
+            } finally {
+                // Remove from pending updates
+                this.pendingPropertyUpdates.delete(filePath);
+            }
+        }, delay);
+        
+        this.pendingPropertyUpdates.set(filePath, timeout);
+        this.debugLogger.log('Scheduled property update for:', filePath, 'in', delay, 'ms');
     }
 
     /**
@@ -489,6 +568,34 @@ export default class MentionsPlugin extends Plugin {
         }
     }
 
+    /**
+     * Check if user just completed typing a mention by pressing space, enter, or punctuation
+     */
+    private async checkForMentionCompletion(view: MarkdownView): Promise<void> {
+        if (!this.settings.autoUpdateProperties || !view.file) return;
+
+        const editor = view.editor;
+        const cursor = editor.getCursor();
+        const line = editor.getLine(cursor.line);
+        
+        this.debugLogger.log('Checking for mention completion:', {
+            line,
+            cursorPos: cursor.ch,
+            lineLength: line.length
+        });
+        
+        // Simplified approach: look for any completed mentions in the line
+        // and schedule an update if found
+        const mentionPattern = /@[a-zа-я.-]+/g;
+        const matches = Array.from(line.matchAll(mentionPattern));
+        
+        if (matches.length > 0) {
+            this.debugLogger.log('Found completed mentions in line, scheduling update:', matches.map(m => m[0]));
+            // Schedule update with longer delay to avoid interrupting user's flow
+            this.schedulePropertyUpdate(view.file, 1000);
+        }
+    }
+
     async refreshAllMentions(): Promise<void> {
         this.debugLogger.log('Starting full mentions refresh...');
         
@@ -499,10 +606,10 @@ export default class MentionsPlugin extends Plugin {
         const files = this.app.vault.getMarkdownFiles();
         for (const file of files) {
             const content = await this.app.vault.read(file);
-            const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+            const matches = content.match(/@[a-zа-я.-]+/g);
             if (matches) {
                 matches.forEach(match => {
-                    const cleanMatch = match.replace(/^\s*/, '');
+                    const cleanMatch = match; // match already contains @ symbol
                     const position = content.indexOf(match);
                     // Only add if not already exists
                     const exists = this.mentions.some(m => 
@@ -680,6 +787,21 @@ export default class MentionsPlugin extends Plugin {
         this.mentionSuggest = new MentionSuggest(this);
         this.registerEditorSuggest(this.mentionSuggest);
 
+        // Register simplified event handler for mention completion detection
+        // Use only keyup event to avoid conflicts and reduce noise
+        this.registerDomEvent(document, 'keyup', (evt: KeyboardEvent) => {
+            // Only trigger on space, enter, or punctuation that typically ends a mention
+            if (evt.key === ' ' || evt.key === 'Enter' || /[.,!?;:]/.test(evt.key)) {
+                const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+                if (activeView && activeView.file) {
+                    // Longer delay to ensure the character is fully processed
+                    setTimeout(() => {
+                        this.checkForMentionCompletion(activeView);
+                    }, 100);
+                }
+            }
+        });
+
         // Register editor extension for live highlighting
         this.registerEditorExtension([
             this.decorateMentions()
@@ -735,7 +857,7 @@ export default class MentionsPlugin extends Plugin {
             const files = this.app.vault.getMarkdownFiles();
             for (const file of files) {
                 const content = await this.app.vault.read(file);
-                const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+                const matches = content.match(/@[a-zа-я.-]+/g);
                 if (matches) {
                     this.debugLogger.log(`Found mentions in ${file.path}:`, matches);
                     matches.forEach(match => {
@@ -813,7 +935,7 @@ export default class MentionsPlugin extends Plugin {
                 
                 while (node = walker.nextNode() as Text) {
                     nodeCount++;
-                    const matchResult = node.textContent?.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+                    const matchResult = node.textContent?.match(/@[a-zа-я.-]+/g);
                     this.debugLogger.log(`Processing node ${nodeCount}:`, {
                         text: node.textContent,
                         matchResult
@@ -832,7 +954,6 @@ export default class MentionsPlugin extends Plugin {
 
                     matches.forEach((match: string) => {
                         // Add text before the mention
-                        const cleanMatch = match.replace(/^\s*/, '');
                         const beforeText = text.slice(pos, text.indexOf(match, pos));
                         if (beforeText) {
                             fragment.append(beforeText);
@@ -841,21 +962,21 @@ export default class MentionsPlugin extends Plugin {
                         // Create the mention element
                         const mentionEl = document.createElement('span');
                         mentionEl.addClass('mention-tag');
-                        mentionEl.textContent = cleanMatch;
+                        mentionEl.textContent = match; // match already includes @ symbol
                         mentionEl.style.cursor = 'pointer';
-                        mentionEl.setAttribute('data-mention', cleanMatch);
+                        mentionEl.setAttribute('data-mention', match);
                         
                         // Store the mention before adding the click handler
                         const position = text.indexOf(match, pos);
                         const mention = {
-                            text: cleanMatch,
+                            text: match,
                             file: ctx.sourcePath,
                             position: position
                         };
                         
                         // Only add if not already exists
                         const exists = this.mentions.some(m => 
-                            m.text === cleanMatch && 
+                            m.text === match && 
                             m.file === ctx.sourcePath && 
                             m.position === position
                         );
@@ -871,11 +992,11 @@ export default class MentionsPlugin extends Plugin {
                             e.preventDefault();
                             e.stopPropagation();
                             this.debugLogger.log('Mention clicked:', {
-                                match: cleanMatch,
-                                fullText: cleanMatch,
-                                searchText: cleanMatch.slice(1)
+                                match: match,
+                                fullText: match,
+                                searchText: match.slice(1)
                             });
-                            await this.showMentionResults(cleanMatch.slice(1)); // Remove @ symbol
+                            await this.showMentionResults(match.slice(1)); // Remove @ symbol
                         };
 
                         mentionEl.removeEventListener('click', clickHandler);
@@ -934,7 +1055,7 @@ export default class MentionsPlugin extends Plugin {
                         this.mentions = this.mentions.filter(m => m.file !== file.path);
                         
                         // Find all mentions in the file
-                        const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+                        const matches = content.match(/@[a-zа-я.-]+/g);
                         if (matches) {
                             this.debugLogger.log('Found mentions in file:', matches);
                             
@@ -958,13 +1079,10 @@ export default class MentionsPlugin extends Plugin {
                         }
                         await this.saveData(this.mentions);
 
-                        // Auto-update properties if enabled
-                        if (this.settings.autoUpdateProperties) {
-                            const fileMentions = this.extractMentionsFromContent(content);
-                            if (fileMentions.length > 0) {
-                                await this.updateFileProperties(file, fileMentions);
-                            }
-                        }
+                        // Note: Properties are now updated only when:
+                        // 1. User selects a mention from autocomplete
+                        // 2. User completes typing a mention (detected in MentionSuggest)
+                        // This prevents premature updates during typing
                     }
                 })
             );
@@ -999,7 +1117,7 @@ export default class MentionsPlugin extends Plugin {
                     if (file instanceof TFile && file.extension === 'md') {
                         this.debugLogger.log('New file created:', file.path);
                         const content = await this.app.vault.read(file);
-                        const matches = content.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+                        const matches = content.match(/@[a-zа-я.-]+/g);
                         if (matches) {
                             matches.forEach(match => {
                                 const cleanMatch = match.replace(/^\s*/, '');
@@ -1017,13 +1135,10 @@ export default class MentionsPlugin extends Plugin {
                             }
                             await this.saveData(this.mentions);
 
-                            // Auto-update properties if enabled
-                            if (this.settings.autoUpdateProperties) {
-                                const fileMentions = this.extractMentionsFromContent(content);
-                                if (fileMentions.length > 0) {
-                                    await this.updateFileProperties(file, fileMentions);
-                                }
-                            }
+                            // Note: Properties are now updated only when:
+                            // 1. User selects a mention from autocomplete
+                            // 2. User completes typing a mention (detected in MentionSuggest)
+                            // This prevents premature updates during typing
                         }
                     }
                 })
@@ -1082,6 +1197,12 @@ export default class MentionsPlugin extends Plugin {
     }
 
     onunload() {
+        // Clear all pending property updates
+        this.pendingPropertyUpdates.forEach((timeout) => {
+            clearTimeout(timeout);
+        });
+        this.pendingPropertyUpdates.clear();
+        
         this.app.workspace.detachLeavesOfType(VIEW_TYPE_MENTIONS);
     }
 
@@ -1090,20 +1211,18 @@ export default class MentionsPlugin extends Plugin {
             create: () => Decoration.none,
             update: (decorations, tr) => {
                 const text = tr.state.doc.toString();
-                const matches = text.match(/(?:^|\s)(@[a-zа-я.-]+)/g);
+                const matches = text.match(/@[a-zа-я.-]+/g);
                 const decorationArray: any[] = [];
 
                 if (matches) {
                     let pos = 0;
                     matches.forEach((match: string) => {
-                        const fullMatch = match;
-                        const cleanMatch = match.replace(/^\s*/, '');
-                        const start = text.indexOf(fullMatch, pos) + (fullMatch.length - cleanMatch.length);
+                        const start = text.indexOf(match, pos);
                         if (start >= 0) {
-                            const end = start + cleanMatch.length;
+                            const end = start + match.length;
                             const mentionMark = Decoration.mark({
                                 class: "mention-tag",
-                                attributes: { "data-mention": cleanMatch }
+                                attributes: { "data-mention": match }
                             });
                             decorationArray.push(mentionMark.range(start, end));
                             pos = end;
