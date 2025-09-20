@@ -676,8 +676,9 @@ export default class MentionsPlugin extends Plugin {
      * Extract mentions from file content
      */
     extractMentionsFromContent(content: string): string[] {
-        // Updated regex to better handle mentions followed by other mentions or special characters
-        const matches = content.match(/@[a-zа-я.-]+/g);
+        // Improved regex to exclude email addresses and better handle mentions
+        // Negative lookbehind to ensure @ is not preceded by alphanumeric characters (email)
+        const matches = content.match(/(?<!\w)@[a-zа-я.-]+/g);
         if (!matches) return [];
         
         const mentions = matches.map(match => {
@@ -686,8 +687,20 @@ export default class MentionsPlugin extends Plugin {
             return mention.replace(/[.,!?;:]+$/, '');
         });
         
-        // Filter out empty mentions and remove duplicates
-        return [...new Set(mentions.filter(m => m.length > 0))];
+        // Filter out empty mentions, email-like patterns, and remove duplicates
+        const filteredMentions = mentions.filter(m => {
+            // Skip empty mentions
+            if (m.length === 0) return false;
+            
+            // Skip if it looks like an email domain (contains common TLDs)
+            const emailDomainPattern = /\.(com|org|net|edu|gov|mil|int|co|uk|de|fr|jp|cn|ru|au|ca|br|in|mx|it|es|nl|se|no|dk|fi|pl|cz|hu|gr|tr|il|za|sg|hk|tw|kr|th|my|id|ph|vn|bd|pk|lk|np|mm|kh|la|mn|uz|kz|kg|tj|tm|af|ir|iq|sy|lb|jo|ps|ye|om|ae|qa|kw|bh|sa|eg|ly|tn|dz|ma|sd|et|ke|tz|ug|rw|bi|dj|so|mg|mw|zm|zw|bw|na|sz|ls|mz|ao|cd|cg|cf|td|cm|gq|ga|st|cv|gw|gn|sl|lr|ci|gh|tg|bj|ne|ng|bf|ml|sn|gm|mr|eh)$/i;
+            if (emailDomainPattern.test(m)) return false;
+            
+            return true;
+        });
+        
+        // Remove duplicates
+        return [...new Set(filteredMentions)];
     }
 
     /**
@@ -781,7 +794,7 @@ export default class MentionsPlugin extends Plugin {
         const files = this.app.vault.getMarkdownFiles();
         for (const file of files) {
             const content = await this.app.vault.read(file);
-            const matches = content.match(/@[a-zа-я.-]+/g);
+            const matches = content.match(/(?<!\w)@[a-zа-я.-]+/g);
             if (matches) {
                 matches.forEach(match => {
                     const cleanMatch = match; // match already contains @ symbol
@@ -1036,7 +1049,7 @@ export default class MentionsPlugin extends Plugin {
             const files = this.app.vault.getMarkdownFiles();
             for (const file of files) {
                 const content = await this.app.vault.read(file);
-                const matches = content.match(/@[a-zа-я.-]+/g);
+                const matches = content.match(/(?<!\w)@[a-zа-я.-]+/g);
                 if (matches) {
                     this.debugLogger.log(`Found mentions in ${file.path}:`, matches);
                     matches.forEach(match => {
@@ -1114,7 +1127,7 @@ export default class MentionsPlugin extends Plugin {
                 
                 while (node = walker.nextNode() as Text) {
                     nodeCount++;
-                    const matchResult = node.textContent?.match(/@[a-zа-я.-]+/g);
+                    const matchResult = node.textContent?.match(/(?<!\w)@[a-zа-я.-]+/g);
                     this.debugLogger.log(`Processing node ${nodeCount}:`, {
                         text: node.textContent,
                         matchResult
@@ -1234,7 +1247,7 @@ export default class MentionsPlugin extends Plugin {
                         this.mentions = this.mentions.filter(m => m.file !== file.path);
                         
                         // Find all mentions in the file
-                        const matches = content.match(/@[a-zа-я.-]+/g);
+                        const matches = content.match(/(?<!\w)@[a-zа-я.-]+/g);
                         if (matches) {
                             this.debugLogger.log('Found mentions in file:', matches);
                             
@@ -1296,7 +1309,7 @@ export default class MentionsPlugin extends Plugin {
                     if (file instanceof TFile && file.extension === 'md') {
                         this.debugLogger.log('New file created:', file.path);
                         const content = await this.app.vault.read(file);
-                        const matches = content.match(/@[a-zа-я.-]+/g);
+                        const matches = content.match(/(?<!\w)@[a-zа-я.-]+/g);
                         if (matches) {
                             matches.forEach(match => {
                                 const cleanMatch = match.replace(/^\s*/, '');
@@ -1395,7 +1408,7 @@ export default class MentionsPlugin extends Plugin {
             create: () => Decoration.none,
             update: (decorations, tr) => {
                 const text = tr.state.doc.toString();
-                const matches = text.match(/@[a-zа-я.-]+/g);
+                const matches = text.match(/(?<!\w)@[a-zа-я.-]+/g);
                 const decorationArray: any[] = [];
 
                 if (matches) {

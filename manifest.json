@@ -1,7 +1,7 @@
 {
   "id": "obsidian-people-mentions",
   "name": "People mentions",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "minAppVersion": "0.15.0",
   "description": "A plugin for managing @mentions of people in your notes. Easily track and find all references to specific individuals across your vault.",
   "author": "mediabc",

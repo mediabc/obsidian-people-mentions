@@ -3167,14 +3167,22 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
    * Extract mentions from file content
    */
   extractMentionsFromContent(content) {
-    const matches = content.match(/@[a-zа-я.-]+/g);
+    const matches = content.match(/(?<!\w)@[a-zа-я.-]+/g);
     if (!matches)
       return [];
     const mentions = matches.map((match) => {
       const mention = match.substring(1);
       return mention.replace(/[.,!?;:]+$/, "");
     });
-    return [...new Set(mentions.filter((m) => m.length > 0))];
+    const filteredMentions = mentions.filter((m) => {
+      if (m.length === 0)
+        return false;
+      const emailDomainPattern = /\.(com|org|net|edu|gov|mil|int|co|uk|de|fr|jp|cn|ru|au|ca|br|in|mx|it|es|nl|se|no|dk|fi|pl|cz|hu|gr|tr|il|za|sg|hk|tw|kr|th|my|id|ph|vn|bd|pk|lk|np|mm|kh|la|mn|uz|kz|kg|tj|tm|af|ir|iq|sy|lb|jo|ps|ye|om|ae|qa|kw|bh|sa|eg|ly|tn|dz|ma|sd|et|ke|tz|ug|rw|bi|dj|so|mg|mw|zm|zw|bw|na|sz|ls|mz|ao|cd|cg|cf|td|cm|gq|ga|st|cv|gw|gn|sl|lr|ci|gh|tg|bj|ne|ng|bf|ml|sn|gm|mr|eh)$/i;
+      if (emailDomainPattern.test(m))
+        return false;
+      return true;
+    });
+    return [...new Set(filteredMentions)];
   }
   /**
    * Schedule a delayed properties update using the new properties manager
@@ -3250,7 +3258,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
     const files = this.app.vault.getMarkdownFiles();
     for (const file of files) {
       const content = await this.app.vault.read(file);
-      const matches = content.match(/@[a-zа-я.-]+/g);
+      const matches = content.match(/(?<!\w)@[a-zа-я.-]+/g);
       if (matches) {
         matches.forEach((match) => {
           const cleanMatch = match;
@@ -3460,7 +3468,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
       const files = this.app.vault.getMarkdownFiles();
       for (const file of files) {
         const content = await this.app.vault.read(file);
-        const matches = content.match(/@[a-zа-я.-]+/g);
+        const matches = content.match(/(?<!\w)@[a-zа-я.-]+/g);
         if (matches) {
           this.debugLogger.log(`Found mentions in ${file.path}:`, matches);
           matches.forEach((match) => {
@@ -3524,7 +3532,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
         let nodeCount = 0;
         while (node = walker.nextNode()) {
           nodeCount++;
-          const matchResult = (_a = node.textContent) == null ? void 0 : _a.match(/@[a-zа-я.-]+/g);
+          const matchResult = (_a = node.textContent) == null ? void 0 : _a.match(/(?<!\w)@[a-zа-я.-]+/g);
           this.debugLogger.log(`Processing node ${nodeCount}:`, {
             text: node.textContent,
             matchResult
@@ -3609,7 +3617,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
             const content = await this.app.vault.read(file);
             this.debugLogger.log("Processing file content for mentions");
             this.mentions = this.mentions.filter((m) => m.file !== file.path);
-            const matches = content.match(/@[a-zа-я.-]+/g);
+            const matches = content.match(/(?<!\w)@[a-zа-я.-]+/g);
             if (matches) {
               this.debugLogger.log("Found mentions in file:", matches);
               matches.forEach((match) => {
@@ -3652,7 +3660,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
           if (file instanceof import_obsidian.TFile && file.extension === "md") {
             this.debugLogger.log("New file created:", file.path);
             const content = await this.app.vault.read(file);
-            const matches = content.match(/@[a-zа-я.-]+/g);
+            const matches = content.match(/(?<!\w)@[a-zа-я.-]+/g);
             if (matches) {
               matches.forEach((match) => {
                 const cleanMatch = match.replace(/^\s*/, "");
@@ -3722,7 +3730,7 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
       create: () => import_view.Decoration.none,
       update: (decorations, tr) => {
         const text = tr.state.doc.toString();
-        const matches = text.match(/@[a-zа-я.-]+/g);
+        const matches = text.match(/(?<!\w)@[a-zа-я.-]+/g);
         const decorationArray = [];
         if (matches) {
           let pos = 0;
