@@ -2913,16 +2913,245 @@ var MentionsView = class extends import_obsidian.ItemView {
     });
   }
 };
+var FilePropertiesManager = class {
+  constructor(plugin) {
+    this.updatingProperties = /* @__PURE__ */ new Set();
+    this.pendingUpdates = /* @__PURE__ */ new Map();
+    this.updateQueue = /* @__PURE__ */ new Map();
+    this.DEBOUNCE_DELAY = 1500;
+    // Increased delay for stability
+    this.MAX_RETRIES = 3;
+    this.RETRY_DELAY = 500;
+    this.plugin = plugin;
+  }
+  /**
+   * Schedule a property update with improved debouncing and error handling
+   */
+  scheduleUpdate(file, mentions, delay = this.DEBOUNCE_DELAY) {
+    if (!this.plugin.settings.autoUpdateProperties)
+      return;
+    const filePath = file.path;
+    const timestamp2 = Date.now();
+    this.updateQueue.set(filePath, { mentions, timestamp: timestamp2 });
+    const existingTimeout = this.pendingUpdates.get(filePath);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+      this.plugin.debugLogger.log("Cancelled previous property update for:", filePath);
+    }
+    const timeout = setTimeout(async () => {
+      const queuedUpdate = this.updateQueue.get(filePath);
+      if (queuedUpdate && queuedUpdate.timestamp === timestamp2) {
+        await this.executeUpdate(file, queuedUpdate.mentions);
+        this.updateQueue.delete(filePath);
+      }
+      this.pendingUpdates.delete(filePath);
+    }, delay);
+    this.pendingUpdates.set(filePath, timeout);
+    this.plugin.debugLogger.log("Scheduled property update for:", filePath, "in", delay, "ms");
+  }
+  /**
+   * Execute property update with retry logic and comprehensive error handling
+   */
+  async executeUpdate(file, mentions, retryCount = 0) {
+    const filePath = file.path;
+    try {
+      if (this.updatingProperties.has(filePath)) {
+        this.plugin.debugLogger.log("Skipping property update for", filePath, "- already updating");
+        return false;
+      }
+      this.updatingProperties.add(filePath);
+      this.plugin.debugLogger.log("Executing property update for:", filePath, "with mentions:", mentions);
+      if (!await this.plugin.app.vault.adapter.exists(filePath)) {
+        this.plugin.debugLogger.log("File no longer exists:", filePath);
+        return false;
+      }
+      const success = await this.updateFileProperties(file, mentions);
+      if (success) {
+        this.plugin.debugLogger.log("Property update completed successfully for:", filePath);
+        return true;
+      } else {
+        throw new Error("Property update failed");
+      }
+    } catch (error) {
+      this.plugin.debugLogger.log("Error in property update:", error);
+      if (retryCount < this.MAX_RETRIES) {
+        this.plugin.debugLogger.log(`Retrying property update for ${filePath} (attempt ${retryCount + 1}/${this.MAX_RETRIES})`);
+        await new Promise((resolve) => setTimeout(resolve, this.RETRY_DELAY * (retryCount + 1)));
+        return await this.executeUpdate(file, mentions, retryCount + 1);
+      } else {
+        console.error(`Failed to update properties for ${filePath} after ${this.MAX_RETRIES} attempts:`, error);
+        new import_obsidian.Notice(`Failed to update properties for ${file.name}: ${error.message}`);
+        return false;
+      }
+    } finally {
+      this.updatingProperties.delete(filePath);
+    }
+  }
+  /**
+   * Safely parse and validate frontmatter
+   */
+  parseFrontmatter(content) {
+    const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
+    const frontmatterMatch = content.match(frontmatterRegex);
+    let frontmatter = {};
+    let bodyContent = content;
+    let hasValidFrontmatter = false;
+    if (frontmatterMatch) {
+      const frontmatterString = frontmatterMatch[1];
+      bodyContent = content.replace(frontmatterRegex, "");
+      try {
+        const parsed = load(frontmatterString);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          frontmatter = parsed;
+          hasValidFrontmatter = true;
+        } else {
+          this.plugin.debugLogger.log("Invalid frontmatter structure, using empty object");
+          frontmatter = {};
+        }
+      } catch (error) {
+        this.plugin.debugLogger.log("Error parsing YAML frontmatter:", error);
+        try {
+          frontmatter = this.parseSimpleFrontmatter(frontmatterString);
+          hasValidFrontmatter = true;
+        } catch (fallbackError) {
+          this.plugin.debugLogger.log("Fallback parsing also failed, using empty object");
+          frontmatter = {};
+        }
+      }
+    }
+    return { frontmatter, bodyContent, hasValidFrontmatter };
+  }
+  /**
+   * Fallback parser for simple frontmatter
+   */
+  parseSimpleFrontmatter(frontmatterString) {
+    const result = {};
+    const lines = frontmatterString.split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith("#")) {
+        const colonIndex = trimmed.indexOf(":");
+        if (colonIndex > 0) {
+          const key = trimmed.substring(0, colonIndex).trim();
+          const value = trimmed.substring(colonIndex + 1).trim();
+          try {
+            result[key] = load(value) || value;
+          } catch (e) {
+            result[key] = value;
+          }
+        }
+      }
+    }
+    return result;
+  }
+  /**
+   * Safely serialize frontmatter to YAML
+   */
+  serializeFrontmatter(frontmatter) {
+    if (!frontmatter || Object.keys(frontmatter).length === 0) {
+      return "";
+    }
+    try {
+      const yamlString = dump(frontmatter, {
+        flowLevel: -1,
+        quotingType: '"',
+        forceQuotes: false,
+        sortKeys: true,
+        lineWidth: -1
+      });
+      return `---
+${yamlString}---
+`;
+    } catch (error) {
+      this.plugin.debugLogger.log("Error serializing to YAML, using fallback:", error);
+      const lines = Object.entries(frontmatter).map(([key, value]) => {
+        if (Array.isArray(value)) {
+          if (value.length === 0) {
+            return `${key}: []`;
+          }
+          const serializedItems = value.map(
+            (v) => typeof v === "string" ? `"${v.replace(/"/g, '\\"')}"` : String(v)
+          );
+          return `${key}: [${serializedItems.join(", ")}]`;
+        } else if (typeof value === "string") {
+          return `${key}: "${value.replace(/"/g, '\\"')}"`;
+        } else {
+          return `${key}: ${String(value)}`;
+        }
+      });
+      return `---
+${lines.join("\n")}
+---
+`;
+    }
+  }
+  /**
+   * Update file properties with enhanced error handling and validation
+   */
+  async updateFileProperties(file, mentions) {
+    try {
+      let content;
+      try {
+        content = await this.plugin.app.vault.read(file);
+      } catch (error) {
+        throw new Error(`Failed to read file: ${error.message}`);
+      }
+      const { frontmatter, bodyContent, hasValidFrontmatter } = this.parseFrontmatter(content);
+      const updatedFrontmatter = { ...frontmatter };
+      if (mentions.length > 0) {
+        updatedFrontmatter[this.plugin.settings.propertiesFieldName] = [...mentions];
+      } else {
+        delete updatedFrontmatter[this.plugin.settings.propertiesFieldName];
+      }
+      const newFrontmatter = this.serializeFrontmatter(updatedFrontmatter);
+      const newContent = newFrontmatter + bodyContent;
+      if (newContent === content) {
+        this.plugin.debugLogger.log("No changes needed for:", file.path);
+        return true;
+      }
+      try {
+        await this.plugin.app.vault.modify(file, newContent);
+        this.plugin.debugLogger.log("File properties updated successfully for:", file.path);
+        return true;
+      } catch (error) {
+        throw new Error(`Failed to write file: ${error.message}`);
+      }
+    } catch (error) {
+      this.plugin.debugLogger.log("Error in updateFileProperties:", error);
+      throw error;
+    }
+  }
+  /**
+   * Clean up pending updates
+   */
+  cleanup() {
+    this.pendingUpdates.forEach((timeout) => {
+      clearTimeout(timeout);
+    });
+    this.pendingUpdates.clear();
+    this.updateQueue.clear();
+    this.updatingProperties.clear();
+  }
+  /**
+   * Get status information for debugging
+   */
+  getStatus() {
+    return {
+      pendingUpdates: this.pendingUpdates.size,
+      updatingFiles: this.updatingProperties.size,
+      queuedUpdates: this.updateQueue.size
+    };
+  }
+};
 var MentionsPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.mentions = [];
     this.editorDecorations = /* @__PURE__ */ new Map();
+    // Legacy properties for backward compatibility
     this.updatingProperties = /* @__PURE__ */ new Set();
-    // Track files being updated to prevent loops
     this.pendingPropertyUpdates = /* @__PURE__ */ new Map();
   }
-  // Track pending updates
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     this.debugLogger = new DebugLogger(this.settings.debugMode);
@@ -2948,99 +3177,28 @@ var MentionsPlugin = class extends import_obsidian.Plugin {
     return [...new Set(mentions.filter((m) => m.length > 0))];
   }
   /**
-   * Schedule a delayed properties update, canceling any previous pending update for the same file
+   * Schedule a delayed properties update using the new properties manager
    */
-  schedulePropertyUpdate(file, delay = 1e3) {
+  schedulePropertyUpdate(file, delay = 1500) {
     if (!this.settings.autoUpdateProperties)
       return;
-    const filePath = file.path;
-    const existingTimeout = this.pendingPropertyUpdates.get(filePath);
-    if (existingTimeout) {
-      clearTimeout(existingTimeout);
-      this.debugLogger.log("Cancelled previous property update for:", filePath);
+    try {
+      this.app.vault.read(file).then((content) => {
+        const mentions = this.extractMentionsFromContent(content);
+        this.propertiesManager.scheduleUpdate(file, mentions, delay);
+      }).catch((error) => {
+        this.debugLogger.log("Error reading file for property update:", error);
+      });
+    } catch (error) {
+      this.debugLogger.log("Error in schedulePropertyUpdate:", error);
     }
-    const timeout = setTimeout(async () => {
-      try {
-        const currentContent = await this.app.vault.read(file);
-        const mentions = this.extractMentionsFromContent(currentContent);
-        await this.updateFileProperties(file, mentions);
-        this.debugLogger.log("Scheduled property update completed for:", filePath, "with mentions:", mentions);
-      } catch (error) {
-        console.error("Error in scheduled property update:", error);
-      } finally {
-        this.pendingPropertyUpdates.delete(filePath);
-      }
-    }, delay);
-    this.pendingPropertyUpdates.set(filePath, timeout);
-    this.debugLogger.log("Scheduled property update for:", filePath, "in", delay, "ms");
   }
   /**
-   * Update file properties with mentions
+   * Legacy method - now delegates to the properties manager
+   * Kept for backward compatibility
    */
   async updateFileProperties(file, mentions) {
-    try {
-      if (this.updatingProperties.has(file.path)) {
-        this.debugLogger.log("Skipping property update for", file.path, "- already updating");
-        return;
-      }
-      this.updatingProperties.add(file.path);
-      this.debugLogger.log("Updating file properties for:", file.path, "with mentions:", mentions);
-      const content = await this.app.vault.read(file);
-      const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
-      const frontmatterMatch = content.match(frontmatterRegex);
-      let frontmatter = {};
-      let bodyContent = content;
-      if (frontmatterMatch) {
-        const frontmatterString = frontmatterMatch[1];
-        bodyContent = content.replace(frontmatterRegex, "");
-        try {
-          frontmatter = load(frontmatterString) || {};
-          if (typeof frontmatter !== "object" || frontmatter === null) {
-            frontmatter = {};
-          }
-        } catch (error) {
-          this.debugLogger.log("Error parsing YAML frontmatter, using empty object:", error);
-          frontmatter = {};
-        }
-      }
-      frontmatter[this.settings.propertiesFieldName] = mentions;
-      let newFrontmatter = "";
-      try {
-        if (Object.keys(frontmatter).length > 0) {
-          const yamlString = dump(frontmatter, {
-            flowLevel: -1,
-            quotingType: '"'
-          });
-          newFrontmatter = `---
-${yamlString}---
-`;
-        }
-      } catch (error) {
-        this.debugLogger.log("Error converting to YAML:", error);
-        const newFrontmatterLines = Object.entries(frontmatter).map(([key, value]) => {
-          if (Array.isArray(value)) {
-            if (value.length === 0) {
-              return `${key}: []`;
-            }
-            return `${key}: [${value.map((v) => `"${v}"`).join(", ")}]`;
-          } else {
-            return `${key}: "${value}"`;
-          }
-        });
-        newFrontmatter = newFrontmatterLines.length > 0 ? `---
-${newFrontmatterLines.join("\n")}
----
-` : "";
-      }
-      const newContent = newFrontmatter + bodyContent;
-      await this.app.vault.modify(file, newContent);
-      this.debugLogger.log("File properties updated successfully for:", file.path);
-    } catch (error) {
-      console.error("Error updating file properties:", error);
-      new import_obsidian.Notice(`Error updating properties for ${file.name}: ${error.message}`);
-    } finally {
-      this.updatingProperties.delete(file.path);
-    }
+    this.propertiesManager.scheduleUpdate(file, mentions, 0);
   }
   /**
    * Update properties for a specific file
@@ -3078,25 +3236,13 @@ ${newFrontmatterLines.join("\n")}
     }
   }
   /**
-   * Check if user just completed typing a mention by pressing space, enter, or punctuation
+   * Check for content changes that might affect mentions and update properties accordingly
    */
-  async checkForMentionCompletion(view) {
+  async checkForContentChanges(view) {
     if (!this.settings.autoUpdateProperties || !view.file)
       return;
-    const editor = view.editor;
-    const cursor = editor.getCursor();
-    const line = editor.getLine(cursor.line);
-    this.debugLogger.log("Checking for mention completion:", {
-      line,
-      cursorPos: cursor.ch,
-      lineLength: line.length
-    });
-    const mentionPattern = /@[a-zа-я.-]+/g;
-    const matches = Array.from(line.matchAll(mentionPattern));
-    if (matches.length > 0) {
-      this.debugLogger.log("Found completed mentions in line, scheduling update:", matches.map((m) => m[0]));
-      this.schedulePropertyUpdate(view.file, 1e3);
-    }
+    this.debugLogger.log("Checking for content changes that affect mentions");
+    this.schedulePropertyUpdate(view.file, 1e3);
   }
   async refreshAllMentions() {
     this.debugLogger.log("Starting full mentions refresh...");
@@ -3181,6 +3327,7 @@ ${newFrontmatterLines.join("\n")}
   }
   async onload() {
     await this.loadSettings();
+    this.propertiesManager = new FilePropertiesManager(this);
     this.addSettingTab(new MentionsSettingTab(this));
     this.debugLogger.log("MentionsPlugin loading...");
     const mentionStyles = document.createElement("style");
@@ -3260,11 +3407,11 @@ ${newFrontmatterLines.join("\n")}
     this.mentionSuggest = new MentionSuggest(this);
     this.registerEditorSuggest(this.mentionSuggest);
     this.registerDomEvent(document, "keyup", (evt) => {
-      if (evt.key === " " || evt.key === "Enter" || /[.,!?;:]/.test(evt.key)) {
+      if (evt.key === " " || evt.key === "Enter" || /[.,!?;:]/.test(evt.key) || evt.key === "Backspace" || evt.key === "Delete") {
         const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
         if (activeView && activeView.file) {
           setTimeout(() => {
-            this.checkForMentionCompletion(activeView);
+            this.checkForContentChanges(activeView);
           }, 100);
         }
       }
@@ -3561,6 +3708,9 @@ ${newFrontmatterLines.join("\n")}
     }
   }
   onunload() {
+    if (this.propertiesManager) {
+      this.propertiesManager.cleanup();
+    }
     this.pendingPropertyUpdates.forEach((timeout) => {
       clearTimeout(timeout);
     });

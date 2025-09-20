@@ -361,6 +361,291 @@ class MentionsView extends ItemView {
     }
 }
 
+// Enhanced file properties manager for better stability
+class FilePropertiesManager {
+    private plugin: MentionsPlugin;
+    private updatingProperties: Set<string> = new Set();
+    private pendingUpdates: Map<string, NodeJS.Timeout> = new Map();
+    private updateQueue: Map<string, { mentions: string[], timestamp: number }> = new Map();
+    private readonly DEBOUNCE_DELAY = 1500; // Increased delay for stability
+    private readonly MAX_RETRIES = 3;
+    private readonly RETRY_DELAY = 500;
+
+    constructor(plugin: MentionsPlugin) {
+        this.plugin = plugin;
+    }
+
+    /**
+     * Schedule a property update with improved debouncing and error handling
+     */
+    scheduleUpdate(file: TFile, mentions: string[], delay: number = this.DEBOUNCE_DELAY): void {
+        if (!this.plugin.settings.autoUpdateProperties) return;
+
+        const filePath = file.path;
+        const timestamp = Date.now();
+        
+        // Store the latest update request
+        this.updateQueue.set(filePath, { mentions, timestamp });
+        
+        // Cancel any existing pending update
+        const existingTimeout = this.pendingUpdates.get(filePath);
+        if (existingTimeout) {
+            clearTimeout(existingTimeout);
+            this.plugin.debugLogger.log('Cancelled previous property update for:', filePath);
+        }
+        
+        // Schedule new update
+        const timeout = setTimeout(async () => {
+            const queuedUpdate = this.updateQueue.get(filePath);
+            if (queuedUpdate && queuedUpdate.timestamp === timestamp) {
+                await this.executeUpdate(file, queuedUpdate.mentions);
+                this.updateQueue.delete(filePath);
+            }
+            this.pendingUpdates.delete(filePath);
+        }, delay);
+        
+        this.pendingUpdates.set(filePath, timeout);
+        this.plugin.debugLogger.log('Scheduled property update for:', filePath, 'in', delay, 'ms');
+    }
+
+    /**
+     * Execute property update with retry logic and comprehensive error handling
+     */
+    private async executeUpdate(file: TFile, mentions: string[], retryCount: number = 0): Promise<boolean> {
+        const filePath = file.path;
+        
+        try {
+            // Prevent concurrent updates
+            if (this.updatingProperties.has(filePath)) {
+                this.plugin.debugLogger.log('Skipping property update for', filePath, '- already updating');
+                return false;
+            }
+            
+            this.updatingProperties.add(filePath);
+            this.plugin.debugLogger.log('Executing property update for:', filePath, 'with mentions:', mentions);
+            
+            // Validate file still exists
+            if (!await this.plugin.app.vault.adapter.exists(filePath)) {
+                this.plugin.debugLogger.log('File no longer exists:', filePath);
+                return false;
+            }
+            
+            const success = await this.updateFileProperties(file, mentions);
+            
+            if (success) {
+                this.plugin.debugLogger.log('Property update completed successfully for:', filePath);
+                return true;
+            } else {
+                throw new Error('Property update failed');
+            }
+            
+        } catch (error) {
+            this.plugin.debugLogger.log('Error in property update:', error);
+            
+            // Retry logic
+            if (retryCount < this.MAX_RETRIES) {
+                this.plugin.debugLogger.log(`Retrying property update for ${filePath} (attempt ${retryCount + 1}/${this.MAX_RETRIES})`);
+                
+                await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * (retryCount + 1)));
+                return await this.executeUpdate(file, mentions, retryCount + 1);
+            } else {
+                console.error(`Failed to update properties for ${filePath} after ${this.MAX_RETRIES} attempts:`, error);
+                new Notice(`Failed to update properties for ${file.name}: ${error.message}`);
+                return false;
+            }
+        } finally {
+            this.updatingProperties.delete(filePath);
+        }
+    }
+
+    /**
+     * Safely parse and validate frontmatter
+     */
+    private parseFrontmatter(content: string): { frontmatter: any, bodyContent: string, hasValidFrontmatter: boolean } {
+        const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
+        const frontmatterMatch = content.match(frontmatterRegex);
+        
+        let frontmatter: any = {};
+        let bodyContent = content;
+        let hasValidFrontmatter = false;
+        
+        if (frontmatterMatch) {
+            const frontmatterString = frontmatterMatch[1];
+            bodyContent = content.replace(frontmatterRegex, '');
+            
+            try {
+                const parsed = yaml.load(frontmatterString);
+                
+                // Validate parsed data
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    frontmatter = parsed;
+                    hasValidFrontmatter = true;
+                } else {
+                    this.plugin.debugLogger.log('Invalid frontmatter structure, using empty object');
+                    frontmatter = {};
+                }
+            } catch (error) {
+                this.plugin.debugLogger.log('Error parsing YAML frontmatter:', error);
+                // Try to preserve the original frontmatter if possible
+                try {
+                    // Attempt to parse as simple key-value pairs
+                    frontmatter = this.parseSimpleFrontmatter(frontmatterString);
+                    hasValidFrontmatter = true;
+                } catch (fallbackError) {
+                    this.plugin.debugLogger.log('Fallback parsing also failed, using empty object');
+                    frontmatter = {};
+                }
+            }
+        }
+        
+        return { frontmatter, bodyContent, hasValidFrontmatter };
+    }
+
+    /**
+     * Fallback parser for simple frontmatter
+     */
+    private parseSimpleFrontmatter(frontmatterString: string): any {
+        const result: any = {};
+        const lines = frontmatterString.split('\n');
+        
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed && !trimmed.startsWith('#')) {
+                const colonIndex = trimmed.indexOf(':');
+                if (colonIndex > 0) {
+                    const key = trimmed.substring(0, colonIndex).trim();
+                    const value = trimmed.substring(colonIndex + 1).trim();
+                    
+                    // Try to parse the value
+                    try {
+                        result[key] = yaml.load(value) || value;
+                    } catch {
+                        result[key] = value;
+                    }
+                }
+            }
+        }
+        
+        return result;
+    }
+
+    /**
+     * Safely serialize frontmatter to YAML
+     */
+    private serializeFrontmatter(frontmatter: any): string {
+        if (!frontmatter || Object.keys(frontmatter).length === 0) {
+            return '';
+        }
+        
+        try {
+            const yamlString = yaml.dump(frontmatter, {
+                flowLevel: -1,
+                quotingType: '"',
+                forceQuotes: false,
+                sortKeys: true,
+                lineWidth: -1
+            });
+            return `---\n${yamlString}---\n`;
+        } catch (error) {
+            this.plugin.debugLogger.log('Error serializing to YAML, using fallback:', error);
+            
+            // Fallback to simple serialization
+            const lines = Object.entries(frontmatter).map(([key, value]) => {
+                if (Array.isArray(value)) {
+                    if (value.length === 0) {
+                        return `${key}: []`;
+                    }
+                    const serializedItems = value.map(v => 
+                        typeof v === 'string' ? `"${v.replace(/"/g, '\\"')}"` : String(v)
+                    );
+                    return `${key}: [${serializedItems.join(', ')}]`;
+                } else if (typeof value === 'string') {
+                    return `${key}: "${value.replace(/"/g, '\\"')}"`;
+                } else {
+                    return `${key}: ${String(value)}`;
+                }
+            });
+            
+            return `---\n${lines.join('\n')}\n---\n`;
+        }
+    }
+
+    /**
+     * Update file properties with enhanced error handling and validation
+     */
+    private async updateFileProperties(file: TFile, mentions: string[]): Promise<boolean> {
+        try {
+            // Read current file content with validation
+            let content: string;
+            try {
+                content = await this.plugin.app.vault.read(file);
+            } catch (error) {
+                throw new Error(`Failed to read file: ${error.message}`);
+            }
+            
+            // Parse frontmatter safely
+            const { frontmatter, bodyContent, hasValidFrontmatter } = this.parseFrontmatter(content);
+            
+            // Update mentions in frontmatter
+            const updatedFrontmatter = { ...frontmatter };
+            
+            if (mentions.length > 0) {
+                updatedFrontmatter[this.plugin.settings.propertiesFieldName] = [...mentions]; // Create a copy
+            } else {
+                // Remove the mentions property if no mentions found
+                delete updatedFrontmatter[this.plugin.settings.propertiesFieldName];
+            }
+            
+            // Generate new content
+            const newFrontmatter = this.serializeFrontmatter(updatedFrontmatter);
+            const newContent = newFrontmatter + bodyContent;
+            
+            // Validate that content has actually changed
+            if (newContent === content) {
+                this.plugin.debugLogger.log('No changes needed for:', file.path);
+                return true;
+            }
+            
+            // Write updated content with validation
+            try {
+                await this.plugin.app.vault.modify(file, newContent);
+                this.plugin.debugLogger.log('File properties updated successfully for:', file.path);
+                return true;
+            } catch (error) {
+                throw new Error(`Failed to write file: ${error.message}`);
+            }
+            
+        } catch (error) {
+            this.plugin.debugLogger.log('Error in updateFileProperties:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Clean up pending updates
+     */
+    cleanup(): void {
+        // Clear all pending updates
+        this.pendingUpdates.forEach((timeout) => {
+            clearTimeout(timeout);
+        });
+        this.pendingUpdates.clear();
+        this.updateQueue.clear();
+        this.updatingProperties.clear();
+    }
+
+    /**
+     * Get status information for debugging
+     */
+    getStatus(): { pendingUpdates: number, updatingFiles: number, queuedUpdates: number } {
+        return {
+            pendingUpdates: this.pendingUpdates.size,
+            updatingFiles: this.updatingProperties.size,
+            queuedUpdates: this.updateQueue.size
+        };
+    }
+}
+
 export default class MentionsPlugin extends Plugin {
     private mentionsView: MentionsView;
     private mentions: Mention[] = [];
@@ -368,8 +653,10 @@ export default class MentionsPlugin extends Plugin {
     private editorDecorations: Map<string, DecorationSet> = new Map();
     settings: MentionsPluginSettings;
     debugLogger: DebugLogger;
-    private updatingProperties: Set<string> = new Set(); // Track files being updated to prevent loops
-    private pendingPropertyUpdates: Map<string, NodeJS.Timeout> = new Map(); // Track pending updates
+    private propertiesManager: FilePropertiesManager;
+    // Legacy properties for backward compatibility
+    private updatingProperties: Set<string> = new Set();
+    private pendingPropertyUpdates: Map<string, NodeJS.Timeout> = new Map();
 
     async loadSettings() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -404,127 +691,30 @@ export default class MentionsPlugin extends Plugin {
     }
 
     /**
-     * Schedule a delayed properties update, canceling any previous pending update for the same file
+     * Schedule a delayed properties update using the new properties manager
      */
-    schedulePropertyUpdate(file: TFile, delay: number = 1000): void {
+    schedulePropertyUpdate(file: TFile, delay: number = 1500): void {
         if (!this.settings.autoUpdateProperties) return;
 
-        const filePath = file.path;
-        
-        // Cancel any existing pending update for this file
-        const existingTimeout = this.pendingPropertyUpdates.get(filePath);
-        if (existingTimeout) {
-            clearTimeout(existingTimeout);
-            this.debugLogger.log('Cancelled previous property update for:', filePath);
+        try {
+            // Extract mentions from current content
+            this.app.vault.read(file).then(content => {
+                const mentions = this.extractMentionsFromContent(content);
+                this.propertiesManager.scheduleUpdate(file, mentions, delay);
+            }).catch(error => {
+                this.debugLogger.log('Error reading file for property update:', error);
+            });
+        } catch (error) {
+            this.debugLogger.log('Error in schedulePropertyUpdate:', error);
         }
-        
-        // Schedule new update with longer delay for stability
-        const timeout = setTimeout(async () => {
-            try {
-                // Double-check that the file still exists and hasn't been modified recently
-                const currentContent = await this.app.vault.read(file);
-                const mentions = this.extractMentionsFromContent(currentContent);
-                
-                // Always update properties, even if no mentions (to clear old ones)
-                await this.updateFileProperties(file, mentions);
-                this.debugLogger.log('Scheduled property update completed for:', filePath, 'with mentions:', mentions);
-            } catch (error) {
-                console.error('Error in scheduled property update:', error);
-            } finally {
-                // Remove from pending updates
-                this.pendingPropertyUpdates.delete(filePath);
-            }
-        }, delay);
-        
-        this.pendingPropertyUpdates.set(filePath, timeout);
-        this.debugLogger.log('Scheduled property update for:', filePath, 'in', delay, 'ms');
     }
 
     /**
-     * Update file properties with mentions
+     * Legacy method - now delegates to the properties manager
+     * Kept for backward compatibility
      */
     async updateFileProperties(file: TFile, mentions: string[]): Promise<void> {
-        try {
-            // Prevent infinite loops
-            if (this.updatingProperties.has(file.path)) {
-                this.debugLogger.log('Skipping property update for', file.path, '- already updating');
-                return;
-            }
-            
-            this.updatingProperties.add(file.path);
-            this.debugLogger.log('Updating file properties for:', file.path, 'with mentions:', mentions);
-            
-            // Read current file content
-            const content = await this.app.vault.read(file);
-            
-            // Parse frontmatter
-            const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
-            const frontmatterMatch = content.match(frontmatterRegex);
-            
-            let frontmatter: any = {};
-            let bodyContent = content;
-            
-            if (frontmatterMatch) {
-                const frontmatterString = frontmatterMatch[1];
-                bodyContent = content.replace(frontmatterRegex, '');
-                
-                // Parse YAML frontmatter using js-yaml
-                try {
-                    frontmatter = yaml.load(frontmatterString) || {};
-                    // Ensure frontmatter is an object
-                    if (typeof frontmatter !== 'object' || frontmatter === null) {
-                        frontmatter = {};
-                    }
-                } catch (error) {
-                    this.debugLogger.log('Error parsing YAML frontmatter, using empty object:', error);
-                    frontmatter = {};
-                }
-            }
-            
-            // Update mentions in frontmatter (only this field)
-            frontmatter[this.settings.propertiesFieldName] = mentions;
-            
-            // Convert back to YAML and build new content
-            let newFrontmatter = '';
-            try {
-                if (Object.keys(frontmatter).length > 0) {
-                    const yamlString = yaml.dump(frontmatter, {
-                        flowLevel: -1,
-                        quotingType: '"'
-                    });
-                    newFrontmatter = `---\n${yamlString}---\n`;
-                }
-            } catch (error) {
-                this.debugLogger.log('Error converting to YAML:', error);
-                // Fallback to simple format
-                const newFrontmatterLines = Object.entries(frontmatter).map(([key, value]) => {
-                    if (Array.isArray(value)) {
-                        if (value.length === 0) {
-                            return `${key}: []`;
-                        }
-                        return `${key}: [${value.map(v => `"${v}"`).join(', ')}]`;
-                    } else {
-                        return `${key}: "${value}"`;
-                    }
-                });
-                newFrontmatter = newFrontmatterLines.length > 0 
-                    ? `---\n${newFrontmatterLines.join('\n')}\n---\n` 
-                    : '';
-            }
-            
-            const newContent = newFrontmatter + bodyContent;
-            
-            // Write updated content
-            await this.app.vault.modify(file, newContent);
-            
-            this.debugLogger.log('File properties updated successfully for:', file.path);
-        } catch (error) {
-            console.error('Error updating file properties:', error);
-            new Notice(`Error updating properties for ${file.name}: ${error.message}`);
-        } finally {
-            // Always remove the file from updating set
-            this.updatingProperties.delete(file.path);
-        }
+        this.propertiesManager.scheduleUpdate(file, mentions, 0); // Immediate update
     }
 
     /**
@@ -569,31 +759,16 @@ export default class MentionsPlugin extends Plugin {
     }
 
     /**
-     * Check if user just completed typing a mention by pressing space, enter, or punctuation
+     * Check for content changes that might affect mentions and update properties accordingly
      */
-    private async checkForMentionCompletion(view: MarkdownView): Promise<void> {
+    private async checkForContentChanges(view: MarkdownView): Promise<void> {
         if (!this.settings.autoUpdateProperties || !view.file) return;
 
-        const editor = view.editor;
-        const cursor = editor.getCursor();
-        const line = editor.getLine(cursor.line);
+        this.debugLogger.log('Checking for content changes that affect mentions');
         
-        this.debugLogger.log('Checking for mention completion:', {
-            line,
-            cursorPos: cursor.ch,
-            lineLength: line.length
-        });
-        
-        // Simplified approach: look for any completed mentions in the line
-        // and schedule an update if found
-        const mentionPattern = /@[a-zа-я.-]+/g;
-        const matches = Array.from(line.matchAll(mentionPattern));
-        
-        if (matches.length > 0) {
-            this.debugLogger.log('Found completed mentions in line, scheduling update:', matches.map(m => m[0]));
-            // Schedule update with longer delay to avoid interrupting user's flow
-            this.schedulePropertyUpdate(view.file, 1000);
-        }
+        // Always schedule an update when content changes, regardless of what's in the current line
+        // This ensures that deletions are also handled properly
+        this.schedulePropertyUpdate(view.file, 1000);
     }
 
     async refreshAllMentions(): Promise<void> {
@@ -702,6 +877,9 @@ export default class MentionsPlugin extends Plugin {
     async onload() {
         await this.loadSettings();
         
+        // Initialize the enhanced properties manager
+        this.propertiesManager = new FilePropertiesManager(this);
+        
         this.addSettingTab(new MentionsSettingTab(this));
         
         this.debugLogger.log('MentionsPlugin loading...');
@@ -790,13 +968,14 @@ export default class MentionsPlugin extends Plugin {
         // Register simplified event handler for mention completion detection
         // Use only keyup event to avoid conflicts and reduce noise
         this.registerDomEvent(document, 'keyup', (evt: KeyboardEvent) => {
-            // Only trigger on space, enter, or punctuation that typically ends a mention
-            if (evt.key === ' ' || evt.key === 'Enter' || /[.,!?;:]/.test(evt.key)) {
+            // Trigger on space, enter, punctuation, or deletion keys
+            if (evt.key === ' ' || evt.key === 'Enter' || /[.,!?;:]/.test(evt.key) || 
+                evt.key === 'Backspace' || evt.key === 'Delete') {
                 const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
                 if (activeView && activeView.file) {
                     // Longer delay to ensure the character is fully processed
                     setTimeout(() => {
-                        this.checkForMentionCompletion(activeView);
+                        this.checkForContentChanges(activeView);
                     }, 100);
                 }
             }
@@ -1197,7 +1376,12 @@ export default class MentionsPlugin extends Plugin {
     }
 
     onunload() {
-        // Clear all pending property updates
+        // Clean up the properties manager
+        if (this.propertiesManager) {
+            this.propertiesManager.cleanup();
+        }
+        
+        // Clear legacy pending updates (for backward compatibility)
         this.pendingPropertyUpdates.forEach((timeout) => {
             clearTimeout(timeout);
         });
