@@ -603,18 +603,23 @@ export default class MentionsPlugin extends Plugin {
         const mentionStyles = document.createElement('style');
         mentionStyles.textContent = `
             .mention-tag {
-                color: var(--text-accent);
-                background-color: var(--background-modifier-border);
-                padding: 0 4px;
-                border-radius: 4px;
+                /* Используем CSS переменные Obsidian для тегов с кастомным голубым цветом */
+                color: #4a9eff;
+                background-color: rgba(74, 158, 255, 0.1);
+                border: var(--tag-border-width) solid rgba(74, 158, 255, 0.2);
+                border-radius: var(--tag-radius);
+                font-size: var(--tag-size);
+                font-weight: var(--tag-weight);
+                padding-top: var(--tag-padding-y);
+                padding-bottom: var(--tag-padding-y);
+                padding-inline-start: var(--tag-padding-x);
+                padding-inline-end: var(--tag-padding-x);
                 cursor: pointer;
                 display: inline-block;
-                transition: background-color 0.2s ease;
+                vertical-align: baseline;
+                text-decoration: none;
                 white-space: nowrap;
                 line-height: normal;
-            }
-            .mention-tag:hover {
-                background-color: var(--background-modifier-border-hover);
             }
             .mentions-list-item {
                 padding: 8px;

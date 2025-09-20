@@ -3113,18 +3113,23 @@ ${newFrontmatterLines.join("\n")}
     const mentionStyles = document.createElement("style");
     mentionStyles.textContent = `
             .mention-tag {
-                color: var(--text-accent);
-                background-color: var(--background-modifier-border);
-                padding: 0 4px;
-                border-radius: 4px;
+                /* \u0418\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0435\u043C CSS \u043F\u0435\u0440\u0435\u043C\u0435\u043D\u043D\u044B\u0435 Obsidian \u0434\u043B\u044F \u0442\u0435\u0433\u043E\u0432 \u0441 \u043A\u0430\u0441\u0442\u043E\u043C\u043D\u044B\u043C \u0433\u043E\u043B\u0443\u0431\u044B\u043C \u0446\u0432\u0435\u0442\u043E\u043C */
+                color: #4a9eff;
+                background-color: rgba(74, 158, 255, 0.1);
+                border: var(--tag-border-width) solid rgba(74, 158, 255, 0.2);
+                border-radius: var(--tag-radius);
+                font-size: var(--tag-size);
+                font-weight: var(--tag-weight);
+                padding-top: var(--tag-padding-y);
+                padding-bottom: var(--tag-padding-y);
+                padding-inline-start: var(--tag-padding-x);
+                padding-inline-end: var(--tag-padding-x);
                 cursor: pointer;
                 display: inline-block;
-                transition: background-color 0.2s ease;
+                vertical-align: baseline;
+                text-decoration: none;
                 white-space: nowrap;
                 line-height: normal;
-            }
-            .mention-tag:hover {
-                background-color: var(--background-modifier-border-hover);
             }
             .mentions-list-item {
                 padding: 8px;
